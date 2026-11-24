@@ -12,7 +12,7 @@ export const runtime = 'nodejs';
 export async function GET() {
   return NextResponse.json({
     status: 'ok',
-    service: 'rcum-normalizacao-academica',
+    service: 'rcumc-normalizacao-academica',
     timestamp: new Date().toISOString(),
   });
 }

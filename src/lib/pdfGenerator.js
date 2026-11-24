@@ -125,7 +125,7 @@ export async function gerarPdfPadronizado(texto, tipoDocumento, metadata = {}) {
   // Metadados do PDF (não contêm dados sensíveis do aluno)
   pdfDoc.setTitle(`${DOC_TYPE_LABELS[docType] || 'Documento'} - Padronizado UMC`);
   pdfDoc.setSubject('Documento acadêmico padronizado conforme normas UMC');
-  pdfDoc.setCreator('Sistema de Normalização Acadêmica UMC');
+  pdfDoc.setCreator('RCUMC - Sistema de Normalização Acadêmica UMC');
   pdfDoc.setProducer('pdf-lib');
 
   // Fontes padrão (Times-like: TimesRoman / TimesBold / TimesItalic)
@@ -240,7 +240,7 @@ export async function gerarPdfPadronizado(texto, tipoDocumento, metadata = {}) {
   });
 
   pages.forEach((page, index) => {
-    const footerText = `UMC - Normalização Acadêmica | ${dataGeracao} | Página ${index + 1}/${totalPages}`;
+    const footerText = `RCUMC - Normalização Acadêmica UMC | ${dataGeracao} | Página ${index + 1}/${totalPages}`;
     const footerSize = 8;
     const footerWidth = fontRegular.widthOfTextAtSize(footerText, footerSize);
     page.drawText(footerText, {

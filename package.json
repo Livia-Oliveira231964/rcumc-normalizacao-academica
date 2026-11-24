@@ -1,8 +1,8 @@
 {
-  "name": "rcum-normalizacao-academica",
+  "name": "rcumc-normalizacao-academica",
   "version": "1.0.0",
   "private": true,
-  "description": "Sistema de normalização acadêmica UMC - converte e padroniza documentos acadêmicos",
+  "description": "Sistema de normalização acadêmica UMC (RCUMC) - converte e padroniza documentos acadêmicos",
   "scripts": {
     "dev": "next dev",
     "build": "next build",

@@ -183,7 +183,7 @@ export default function HomePage() {
       {/* Cabeçalho */}
       <header className="header">
         <div className="container">
-          <span className="badge">UMC • Normalização Acadêmica</span>
+          <span className="badge">RCUMC • UMC • Normalização Acadêmica</span>
           <h1>Padronize seu documento acadêmico</h1>
           <p>
             Envie seu arquivo em PDF ou DOCX e receba uma versão padronizada em PDF,
@@ -353,7 +353,7 @@ export default function HomePage() {
       {/* Rodapé */}
       <footer className="footer">
         <div className="container">
-          <p>Sistema de Normalização Acadêmica • UMC</p>
+          <p>RCUMC - Sistema de Normalização Acadêmica • UMC</p>
           <p>Os documentos enviados não são armazenados.</p>
         </div>
       </footer>
