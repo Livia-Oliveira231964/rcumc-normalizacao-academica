@@ -1,11 +1,12 @@
 /* ============================================================
  * PREENCHIMENTO DE MODELO DOCX (RCUMC)
  * ------------------------------------------------------------
- * Abre o modelo .docx oficial (ZIP/XML), substitui o corpo do
- * documento pelo conteúdo extraído, preservando cabeçalho,
- * rodapé, estilos, tema, margens e configurações de página.
+ * Preenche o modelo .docx oficial preservando estilos,
+ * cabeçalho, rodapé, margens e formatação do template.
  *
- * Retorna Buffer do DOCX preenchido.
+ * Estratégia: clona parágrafos do template por papel (título,
+ * heading de seção, corpo) e substitui apenas o texto,
+ * mantendo pPr/rPr/estilos do modelo.
  * ============================================================ */
 
 import JSZip from 'jszip';
@@ -14,11 +15,12 @@ import path from 'path';
 import { DOC_TYPES } from './normalize.js';
 
 const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+const WT = `<w:t xml:space="preserve">`;
 
-function esc(s='') {
+function esc(s = '') {
   return String(s)
-    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-    .replace(/"/g,'&quot;').replace(/'/g,'&apos;');
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&apos;');
 }
 
 function parseSections(text) {
@@ -29,7 +31,7 @@ function parseSections(text) {
     resumo: /^resumo\s*[:\-]?$/i,
     palavras_chave: /^palavras[- ]chave\s*[:\-]?$/i,
     abstract: /^abstract\s*[:\-]?$/i,
-    keywords: /^keywords\s*[:\-]?$/i,
+    keywords: /^keywords?\s*[:\-]?$/i,
     resumen: /^resumen\s*[:\-]?$/i,
     palabras_clave: /^palabras\s+clave\s*[:\-]?$/i,
     introducao: /^introdu[cç][aã]o\s*[:\-]?$/i,
@@ -41,7 +43,7 @@ function parseSections(text) {
     conflito: /^conflito\s+de\s+interesses?\s*[:\-]?$/i,
     dados: /^disponibilidade\s+dos\s+dados\s*[:\-]?$/i,
   };
-  const lines = String(text||'').replace(/\r\n/g,'\n').replace(/\r/g,'\n').split('\n');
+  const lines = String(text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
   const sections = { _preamble: [] };
   let cur = '_preamble';
   for (const raw of lines) {
@@ -49,126 +51,192 @@ function parseSections(text) {
     let matched = null;
     for (const [k, re] of Object.entries(patterns)) { if (re.test(s)) { matched = k; break; } }
     if (matched) { cur = matched; if (!sections[cur]) sections[cur] = []; }
-    else { if (!sections[cur]) sections[cur] = []; sections[cur].push(raw); }
+    else { (sections[cur] ||= []).push(raw); }
   }
   for (const k of Object.keys(sections)) {
     let v = sections[k];
     while (v.length && !v[0].trim()) v.shift();
-    while (v.length && !v[v.length-1].trim()) v.pop();
+    while (v.length && !v[v.length - 1].trim()) v.pop();
     sections[k] = v.join('\n').trim();
+  }
+  // Remove header/footer artifacts that may have leaked into extracted text
+  for (const k of Object.keys(sections)) {
+    sections[k] = sections[k]
+      .replace(/Revista\s+Cientifica\s+UMC\s*\|\s*RCUMC\s*\|\s*ISSN:\s*2525-5150/gi, '')
+      .replace(/RCUMC\s*\|\s*Vol\.\s*\d+\s*\|\s*N\.\s*\d+\s*\|\s*Ano\s*\d+\s*\|?/gi, '')
+      .trim();
   }
   return sections;
 }
 
-/* Constrói XML de parágrafo */
-function pXml(text, opts={}) {
-  const {
-    sizeHalfPt=24, color='000000', bold=false, italic=false,
-    align='both', spaceBefore=0, spaceAfter=120, line=360,
-    font='Times New Roman',
-  } = opts;
-  const jc = align === 'center' ? 'center' : align === 'right' ? 'right' : align === 'left' ? 'left' : 'both';
-  // split text by newlines into separate runs with breaks? simpler: one run per paragraph, breaks for \n
-  const parts = String(text||'').split('\n');
-  const runs = parts.map((part, i) => {
-    const br = i < parts.length - 1 ? `<w:br/>` : '';
-    return `<w:r><w:rPr><w:rFonts w:ascii="${esc(font)}" w:hAnsi="${esc(font)}" w:cs="${esc(font)}"/><w:color w:val="${esc(color)}"/><w:sz w:val="${sizeHalfPt}"/><w:szCs w:val="${sizeHalfPt}"/>${bold?'<w:b/>':''}${italic?'<w:i/>':''}</w:rPr><w:t xml:space="preserve">${esc(part)}</w:t>${br}</w:r>`;
+/* ---- XML helpers ---- */
+function getParaText(pXml) {
+  const re = /<w:t[^>]*>([\s\S]*?)<\/w:t>/g;
+  let m, out = '';
+  while ((m = re.exec(pXml))) out += m[1].replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&apos;/g,"'");
+  return out;
+}
+
+function getPPr(pXml) {
+  const m = pXml.match(/<w:pPr[\s\S]*?<\/w:pPr>/);
+  return m ? m[0] : '<w:pPr/>';
+}
+
+function getPStyle(pXml) {
+  const m = pXml.match(/<w:pStyle[^>]*w:val="([^"]+)"/);
+  return m ? m[1] : '';
+}
+
+/* get first run rPr, stripping highlight (template instructional highlight) */
+function getCleanRPr(pXml) {
+  const m = pXml.match(/<w:rPr[\s\S]*?<\/w:rPr>/);
+  if (!m) return '<w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/></w:rPr>';
+  return m[0].replace(/<w:highlight[^>]*\/>/g, '').replace(/<w:highlight[\s\S]*?<\/w:highlight>/g, '');
+}
+
+function makeParaFromTemplate(templateParaXml, text) {
+  const pPr = getPPr(templateParaXml);
+  const rPr = getCleanRPr(templateParaXml);
+  const lines = String(text ?? '').split('\n');
+  const runs = lines.map((line, i) => {
+    const br = i < lines.length - 1 ? '<w:br/>' : '';
+    return `<w:r>${rPr}${WT}${esc(line)}</w:t>${br}</w:r>`;
   }).join('');
-  return `<w:p><w:pPr><w:spacing w:before="${spaceBefore}" w:after="${spaceAfter}" w:line="${line}" w:lineRule="auto"/><w:jc w:val="${jc}"/></w:pPr>${runs}</w:p>`;
+  // keep any bookmarks/rPrChange? no, safer to rebuild para with pPr + runs
+  // but preserve w:p attributes? rare. keep simple.
+  const pAttrs = (templateParaXml.match(/^<w:p(\s[^>]*)?>/) || ['<w:p>'])[0];
+  const openTag = pAttrs.startsWith('<w:p ') ? pAttrs : '<w:p>';
+  return `${openTag}${pPr}${runs}</w:p>`;
 }
 
-function headingXml(text, sizeHalfPt=24) {
-  return pXml(text, { sizeHalfPt, color:'31849B', align:'left', spaceBefore:0, spaceAfter:120, line:360 });
-}
-function bodyXml(text, sizeHalfPt=24, line=360) {
-  return pXml(text, { sizeHalfPt, color:'000000', align:'both', spaceBefore:0, spaceAfter:120, line });
-}
-
-function buildResumoSimples(sections) {
-  const parts = [];
-  const add = (h, hv, b, bs=24) => {
-    parts.push(headingXml(h, 24)); // headings 12pt = 24 half-pts, color 31849B
-    // title headings in model are 12pt color 31849B; actual title text is 14pt
-    if (hv) parts.push(pXml(hv, { sizeHalfPt: bs, color:'000000', align:'both', spaceAfter:120, line:360 }));
-    parts.push(pXml('', { sizeHalfPt:24, spaceAfter:0 }));
-  };
-  // Título PT - heading 16pt in model? model shows "Título em Português" sz=32 (16pt) color 31849B
-  parts.push(pXml('Título em Português', { sizeHalfPt:32, color:'31849B', align:'left', spaceAfter:120, line:360 }));
-  parts.push(pXml(sections.titulo_pt || sections._preamble || 'Título do artigo em português.', { sizeHalfPt:28, align:'both', spaceAfter:120, line:360 }));
-  parts.push(pXml('', { sizeHalfPt:24, spaceAfter:0 }));
-
-  parts.push(headingXml('Resumo',24));
-  parts.push(bodyXml(sections.resumo || '',24));
-  parts.push(pXml('', { sizeHalfPt:24, spaceAfter:0 }));
-
-  parts.push(headingXml('Palavras-chave',24));
-  parts.push(bodyXml(sections.palavras_chave || '',24));
-  parts.push(pXml('', { sizeHalfPt:24, spaceAfter:0 }));
-
-  parts.push(headingXml('Title in English',24));
-  parts.push(pXml(sections.titulo_en || 'Title of the article in english.', { sizeHalfPt:28, align:'left', spaceAfter:120, line:360 }));
-  parts.push(pXml('', { sizeHalfPt:24, spaceAfter:0 }));
-
-  parts.push(headingXml('Abstract',24));
-  parts.push(bodyXml(sections.abstract || '',24));
-  parts.push(pXml('', { sizeHalfPt:24, spaceAfter:0 }));
-
-  parts.push(headingXml('Keywords',24));
-  parts.push(bodyXml(sections.keywords || '',24));
-  parts.push(pXml('', { sizeHalfPt:24, spaceAfter:0 }));
-
-  parts.push(headingXml('Título en Español',24));
-  parts.push(pXml(sections.titulo_es || 'Título del artículo en español.', { sizeHalfPt:28, align:'left', spaceAfter:120, line:360 }));
-  parts.push(pXml('', { sizeHalfPt:24, spaceAfter:0 }));
-
-  parts.push(headingXml('Resumen',24));
-  parts.push(bodyXml(sections.resumen || '',24));
-  parts.push(pXml('', { sizeHalfPt:24, spaceAfter:0 }));
-
-  parts.push(headingXml('Palabras clave',24));
-  parts.push(bodyXml(sections.palabras_clave || '',24));
-
-  return parts.join('');
+function splitBodyParas(bodyInner) {
+  const paras = [];
+  const re = /<w:p\b[\s\S]*?<\/w:p>/g;
+  let m;
+  while ((m = re.exec(bodyInner))) paras.push({ xml: m[0], index: m.index });
+  return paras;
 }
 
-function buildResumoExpandido(sections) {
-  const parts = [];
-  parts.push(pXml('Título em Português', { sizeHalfPt:32, color:'31849B', align:'left', spaceAfter:120, line:360 }));
-  parts.push(pXml(sections.titulo_pt || sections._preamble || 'Título do artigo em português.', { sizeHalfPt:28, align:'both', spaceAfter:120, line:360 }));
-  parts.push(pXml('', { sizeHalfPt:22, spaceAfter:0 }));
-  parts.push(headingXml('Title in English',24));
-  parts.push(pXml(sections.titulo_en || 'Title of the article in english.', { sizeHalfPt:28, align:'left', spaceAfter:120, line:360 }));
-  parts.push(pXml('', { sizeHalfPt:22, spaceAfter:0 }));
-  parts.push(headingXml('Título en Español',24));
-  parts.push(pXml(sections.titulo_es || 'Título del artículo en español.', { sizeHalfPt:28, align:'left', spaceAfter:120, line:360 }));
-  parts.push(pXml('', { sizeHalfPt:22, spaceAfter:0 }));
+function extractSectPr(bodyInner) {
+  const m = bodyInner.match(/(<w:sectPr[\s\S]*?<\/w:sectPr>)/);
+  return m ? m[1] : '';
+}
 
-  const map = [
-    ['introducao','Introdução'], ['metodos','Material e Métodos'],
-    ['resultados','Resultados e Discussão'], ['conclusao','Conclusão'],
-    ['agradecimentos','Agradecimentos e Financiamentos'],
-    ['conflito','Conflito de Interesses'], ['dados','Disponibilidade dos Dados'],
-  ];
+function classifyPara(p) {
+  const txt = getParaText(p.xml).trim();
+  const style = getPStyle(p.xml).toLowerCase();
+  const norm = txt.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  return { ...p, txt, norm, style };
+}
+
+function findPara(paras, pred) { return paras.find(pred); }
+function findAll(paras, pred) { return paras.filter(pred); }
+
+/* ---- Resumo Simples builder using template paragraphs ---- */
+function buildResumoSimplesFromTemplate(paras, sections) {
+  const byNorm = (n) => paras.find(p => p.norm === n);
+  const byNormIncl = (n) => paras.find(p => p.norm.includes(n));
+
+  // identify template paragraphs
+  const pTituloPtH = byNorm('titulo em portugues');
+  const pTituloPtV = byNormIncl('titulo do artigo em portugues');
+  const pResumoH = byNorm('resumo');
+  const pResumoV = paras.find(p => p.norm.includes('estruturado em um unico paragrafo') && p.norm.includes('250'));
+  const pKwH = byNorm('palavras-chave') || byNorm('palavras chave');
+  const pKwV = paras.find(p => p.norm.includes('cinco descritores') && (p.norm.includes('tematica') || p.norm.includes('tema do trabalho')));
+  const pTitleEnH = byNorm('title in english');
+  const pTitleEnV = byNormIncl('title of the article in english');
+  const pAbsH = byNorm('abstract');
+  const pAbsV = paras.find(p => p.norm.includes('structured in a single paragraph'));
+  const pKwsH = byNorm('keywords');
+  const pKwsV = paras.find(p => p.norm.includes('five descriptors') && (p.norm.includes('study') || p.norm.includes('theme')));
+  const pTituloEsH = byNorm('titulo en espanol') || byNorm('titulo em espanhol');
+  const pTituloEsV = byNormIncl('titulo del articulo en espanol');
+  const pResH = byNorm('resumen');
+  const pResV = paras.find(p => p.norm.includes('estructurado en un solo parrafo'));
+  const pPcH = byNorm('palabras clave');
+  const pPcV = paras.find(p => p.norm.includes('cinco descriptores') && (p.norm.includes('tematica del estudio') || p.norm.includes('tema del trabajo')));
+
+  // pick a blank spacer template (prefer body/no-style blank)
+  // blank spacer: prefer truly empty body paragraph (no pStyle)
+  const blank = paras.find(p => !p.txt && !p.style) || paras.find(p => !p.txt && !/ttulo|titulo|heading/i.test(p.style)) || pResumoV;
+
+  const out = [];
+  const emit = (tpl, text) => { if (tpl) out.push(makeParaFromTemplate(tpl.xml, text)); };
+  const emitBlank = () => { if (blank) out.push(makeParaFromTemplate(blank.xml, '')); };
+
+  emit(pTituloPtH, 'Título em Português');
+  emit(pTituloPtV, sections.titulo_pt || sections._preamble || 'Título do artigo em português.');
+  emitBlank();
+  emit(pResumoH, 'Resumo');
+  emit(pResumoV, sections.resumo || '');
+  emitBlank();
+  emit(pKwH, 'Palavras-chave');
+  emit(pKwV, sections.palavras_chave || '');
+  emitBlank();
+  emit(pTitleEnH, 'Title in English');
+  emit(pTitleEnV, sections.titulo_en || 'Title of the article in english.');
+  emitBlank();
+  emit(pAbsH, 'Abstract');
+  emit(pAbsV, sections.abstract || '');
+  emitBlank();
+  emit(pKwsH, 'Keywords');
+  emit(pKwsV, sections.keywords || '');
+  emitBlank();
+  emit(pTituloEsH, 'Título en Español');
+  emit(pTituloEsV, sections.titulo_es || 'Título del artículo en español.');
+  emitBlank();
+  emit(pResH, 'Resumen');
+  emit(pResV, sections.resumen || '');
+  emitBlank();
+  emit(pPcH, 'Palabras clave');
+  emit(pPcV, sections.palabras_clave || '');
+
+  return out.join('');
+}
+
+function buildResumoExpandidoFromTemplate(paras, sections) {
+  const byNorm = (n) => paras.find(p => p.norm === n);
+  const byNormIncl = (n) => paras.find(p => p.norm.includes(n));
+  const blank = paras.find(p => !p.txt) || paras[paras.length-1];
+  const heading = paras.find(p => p.style.toLowerCase().includes('ttulo2') || p.style.toLowerCase().includes('titulo2')) || paras.find(p => p.norm==='resumo');
+  const body = paras.find(p => p.norm.includes('estruturado em um unico paragrafo') || p.norm.includes('o resumo expandido')) || paras.find(p => !p.style && p.txt.length>30);
+
+  const out = [];
+  const emit = (tpl, text) => { if (tpl) out.push(makeParaFromTemplate(tpl.xml, text)); };
+  const emitBlank = () => { if (blank) out.push(makeParaFromTemplate(blank.xml, '')); };
+
+  emit(byNorm('titulo em portugues') || heading, 'Título em Português');
+  emit(byNormIncl('titulo do artigo em portugues') || body, sections.titulo_pt || sections._preamble || 'Título do artigo em português.');
+  emitBlank();
+  emit(byNorm('title in english') || heading, 'Title in English');
+  emit(byNormIncl('title of the article in english') || body, sections.titulo_en || 'Title of the article in english.');
+  emitBlank();
+  emit(byNorm('titulo en espanol') || byNorm('titulo em espanhol') || heading, 'Título en Español');
+  emit(byNormIncl('titulo del articulo en espanol') || body, sections.titulo_es || 'Título del artículo en español.');
+  emitBlank();
+
+  const map = [['introducao','Introdução'],['metodos','Material e Métodos'],['resultados','Resultados e Discussão'],['conclusao','Conclusão'],['agradecimentos','Agradecimentos e Financiamentos'],['conflito','Conflito de Interesses'],['dados','Disponibilidade dos Dados'],['referencias','Referências']];
   for (const [k,label] of map) {
-    if (sections[k]) {
-      parts.push(headingXml(label,24));
-      parts.push(bodyXml(sections[k],22,360)); // 11pt
-      parts.push(pXml('', { sizeHalfPt:22, spaceAfter:0 }));
-    }
+    if (!sections[k]) continue;
+    emit(heading, label);
+    emit(body, sections[k]);
+    emitBlank();
   }
-  parts.push(headingXml('Referências',24));
-  parts.push(pXml(sections.referencias || '', { sizeHalfPt:20, align:'both', spaceAfter:120, line:240 })); // 10pt, single
-  return parts.join('');
+  if (out.length && !getParaText(out[out.length-1]).trim()) out.pop();
+  return out.join('');
 }
 
-function buildGeneric(sections) {
-  const parts = [];
+function buildGenericFromTemplate(paras, sections) {
+  const body = paras.find(p => p.txt && !getPStyle(p.xml).toLowerCase().includes('ttulo')) || paras[0];
+  const heading = paras.find(p => getPStyle(p.xml).toLowerCase().includes('ttulo')) || body;
+  const out = [];
   for (const [k,v] of Object.entries(sections)) {
     if (!v) continue;
-    if (k !== '_preamble') parts.push(headingXml(k.replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase()),24));
-    parts.push(bodyXml(v,24,360));
+    if (k !== '_preamble') out.push(makeParaFromTemplate(heading.xml, k.replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase())));
+    out.push(makeParaFromTemplate(body.xml, v));
   }
-  return parts.join('') || bodyXml('',24);
+  return out.join('') || (body ? makeParaFromTemplate(body.xml, '') : '');
 }
 
 export async function preencherModeloDocx(tipoDocumento, texto) {
@@ -186,20 +254,18 @@ export async function preencherModeloDocx(tipoDocumento, texto) {
   const docXmlPath = 'word/document.xml';
   let docXml = await zip.file(docXmlPath).async('string');
 
-  const sections = parseSections(texto);
-  let bodyContent = '';
-  if (tipoDocumento === DOC_TYPES.RESUMO_SIMPLES) bodyContent = buildResumoSimples(sections);
-  else if (tipoDocumento === DOC_TYPES.RESUMO_EXPANDIDO) bodyContent = buildResumoExpandido(sections);
-  else bodyContent = buildGeneric(sections);
-
-  // Replace body content, preserving sectPr
   const bodyMatch = docXml.match(/<w:body>([\s\S]*)<\/w:body>/);
   if (!bodyMatch) throw new Error('document.xml sem <w:body>');
   const bodyInner = bodyMatch[1];
-  // capture sectPr (usually inside last w:p/w:pPr or directly in body)
-  const sectPrMatch = bodyInner.match(/(<w:sectPr[\s\S]*?<\/w:sectPr>)/);
-  const sectPr = sectPrMatch ? sectPrMatch[1] : '';
-  // wrap sectPr in a paragraph as in templates
+  const sectPr = extractSectPr(bodyInner);
+  const paras = splitBodyParas(bodyInner).map(classifyPara);
+
+  const sections = parseSections(texto);
+  let bodyContent = '';
+  if (tipoDocumento === DOC_TYPES.RESUMO_SIMPLES) bodyContent = buildResumoSimplesFromTemplate(paras, sections);
+  else if (tipoDocumento === DOC_TYPES.RESUMO_EXPANDIDO) bodyContent = buildResumoExpandidoFromTemplate(paras, sections);
+  else bodyContent = buildGenericFromTemplate(paras, sections);
+
   const sectPara = sectPr ? `<w:p><w:pPr>${sectPr}</w:pPr></w:p>` : '';
   const newBody = `<w:body>${bodyContent}${sectPara}</w:body>`;
   docXml = docXml.replace(/<w:body>[\s\S]*<\/w:body>/, newBody);
