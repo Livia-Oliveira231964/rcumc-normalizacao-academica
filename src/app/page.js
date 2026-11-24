@@ -7,7 +7,8 @@
  *   3. Baixar o PDF padronizado
  *
  * Nenhum arquivo é armazenado - o processamento é feito
- * em memória pela API /api/convert e o resultado é baixado.
+ * pela API (Fly.io com LibreOffice para fidelidade ao modelo)
+ * e o resultado é baixado diretamente.
  * ============================================================ */
 
 'use client';
@@ -27,6 +28,12 @@ const DOC_TYPES = [
 
 const ACCEPTED_EXTENSIONS = '.pdf,.docx';
 const MAX_SIZE_MB = 10;
+
+// API de conversão: usa Fly.io (LibreOffice, modelo fiel) por padrão.
+// Pode ser sobrescrita por NEXT_PUBLIC_CONVERT_API para testes.
+const CONVERT_API =
+  process.env.NEXT_PUBLIC_CONVERT_API ||
+  'https://rcumcnormalizacao-academia.fly.dev/api/convert';
 
 /* ------------------------------------------------------------
  * COMPONENTE PRINCIPAL
@@ -124,7 +131,7 @@ export default function HomePage() {
       formData.append('file', file);
       formData.append('tipoDocumento', tipoDocumento === 'auto' ? '' : tipoDocumento);
 
-      const response = await fetch('/api/convert', {
+      const response = await fetch(CONVERT_API, {
         method: 'POST',
         body: formData,
       });
@@ -334,7 +341,7 @@ export default function HomePage() {
               </div>
               <div className="info-item">
                 <h3>2. Processamento</h3>
-                <p>O sistema extrai o texto e aplica padronização conforme regras UMC.</p>
+                <p>O sistema preenche o modelo oficial RCUMC e aplica a padronização.</p>
               </div>
               <div className="info-item">
                 <h3>3. Baixe</h3>

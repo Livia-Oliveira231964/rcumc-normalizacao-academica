@@ -10,6 +10,7 @@
  * gerador PDF fiel ao layout do modelo (pdf-lib).
  *
  * Sem persistência: temporários em /tmp removidos no finally.
+ * CORS habilitado para permitir chamadas do frontend Vercel.
  * ============================================================ */
 
 import { NextResponse } from 'next/server';
@@ -33,6 +34,18 @@ export const runtime = 'nodejs';
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 const ALLOWED_EXTENSIONS = ['.pdf', '.docx'];
+
+/* CORS - permite que o frontend (Vercel) chame esta API no Fly.io */
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type',
+  'Access-Control-Expose-Headers': 'Content-Disposition, X-Diagnostico, Content-Length',
+};
+
+export async function OPTIONS() {
+  return new NextResponse(null, { status: 204, headers: CORS_HEADERS });
+}
 
 function getExtensao(nome) {
   const i = nome.lastIndexOf('.');
@@ -89,22 +102,22 @@ export async function POST(request) {
     const tipoDocumentoForm = formData.get('tipoDocumento');
 
     if (!file || typeof file === 'string') {
-      return NextResponse.json({ error: 'Nenhum arquivo enviado. Envie um arquivo PDF ou DOCX.' }, { status: 400 });
+      return NextResponse.json({ error: 'Nenhum arquivo enviado. Envie um arquivo PDF ou DOCX.' }, { status: 400, headers: CORS_HEADERS });
     }
     const nomeOriginal = file.name || 'documento';
     const extensao = getExtensao(nomeOriginal);
     if (!ALLOWED_EXTENSIONS.includes(extensao)) {
-      return NextResponse.json({ error: 'Formato inválido. Envie um arquivo .pdf ou .docx.' }, { status: 400 });
+      return NextResponse.json({ error: 'Formato inválido. Envie um arquivo .pdf ou .docx.' }, { status: 400, headers: CORS_HEADERS });
     }
     if (file.size > MAX_FILE_SIZE) {
-      return NextResponse.json({ error: 'Arquivo muito grande. O limite é 10 MB.' }, { status: 400 });
+      return NextResponse.json({ error: 'Arquivo muito grande. O limite é 10 MB.' }, { status: 400, headers: CORS_HEADERS });
     }
 
     const buffer = Buffer.from(await file.arrayBuffer());
     let textoExtraido = extensao === '.docx' ? await extrairTextoDeDOCX(buffer) : await extrairTextoDePDF(buffer);
     textoExtraido = normalizarTextoBasico(textoExtraido);
     if (!textoExtraido || textoExtraido.trim().length < 10) {
-      return NextResponse.json({ error: 'Não foi possível extrair texto do arquivo. Verifique se o documento contém texto selecionável (não apenas imagens escaneadas).' }, { status: 422 });
+      return NextResponse.json({ error: 'Não foi possível extrair texto do arquivo. Verifique se o documento contém texto selecionável (não apenas imagens escaneadas).' }, { status: 422, headers: CORS_HEADERS });
     }
 
     let tipoDocumento = tipoDocumentoForm;
@@ -142,6 +155,7 @@ export async function POST(request) {
     return new NextResponse(pdfBytes, {
       status: 200,
       headers: {
+        ...CORS_HEADERS,
         'Content-Type': 'application/pdf',
         'Content-Disposition': `attachment; filename="${encodeURIComponent(nomeSaida)}"`,
         'Content-Length': String(pdfBytes.length),
@@ -152,7 +166,7 @@ export async function POST(request) {
     });
   } catch (error) {
     console.error('Erro na conversão:', error);
-    return NextResponse.json({ error: 'Erro interno ao processar o documento. Verifique se o arquivo não está corrompido ou protegido por senha.' }, { status: 500 });
+    return NextResponse.json({ error: 'Erro interno ao processar o documento. Verifique se o arquivo não está corrompido ou protegido por senha.' }, { status: 500, headers: CORS_HEADERS });
   } finally {
     await safeRm(tmpDir);
   }
