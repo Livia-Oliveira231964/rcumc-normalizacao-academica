@@ -1,6 +1,6 @@
 # RCUMC - Normalização Acadêmica UMC
 
-Sistema web para normalização de documentos acadêmicos da UMC. Permite que o aluno envie um arquivo **PDF** ou **DOCX** e baixe uma versão **PDF padronizada**, conforme as diretrizes institucionais.
+Sistema web para normalização de documentos acadêmicos da UMC. Permite que o aluno envie um arquivo **PDF** ou **DOCX** e baixe uma versão **DOCX padronizada** no modelo oficial, conforme as diretrizes institucionais.
 
 ## Site
 
@@ -11,7 +11,7 @@ Sistema web para normalização de documentos acadêmicos da UMC. Permite que o 
 - Recebe arquivos em **PDF** ou **DOCX**
 - Detecta ou permite selecionar o tipo de documento (Folha de Rosto, Carta de Apresentação, Resumo Simples, Resumo Expandido)
 - Realiza validação automática com diagnóstico de não conformidades
-- Gera um **PDF padronizado** para download
+- Gera um **DOCX padronizado** no modelo oficial para download
 - **Não armazena dados**: os arquivos são processados apenas em memória durante a conversão
 
 ## Tipos de documento suportados

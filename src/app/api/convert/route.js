@@ -1,25 +1,19 @@
 /* ============================================================
  * API ROUTE: /api/convert
  * ------------------------------------------------------------
- * Recebe PDF/DOCX, preenche o MODELO OFICIAL RCUMC (.docx)
- * da pasta /models preservando cabeçalho, rodapé, margens,
- * cores e estilos, e retorna PDF para download.
+ * Recebe PDF/DOCX, extrai texto e preenche o MODELO OFICIAL
+ * RCUMC (.docx) da pasta /models preservando cabeçalho,
+ * rodapé, margens, cores e estilos do template.
  *
- * Conversão DOCX->PDF: usa LibreOffice (soffice) quando
- * disponível; caso contrário (ex.: Vercel serverless), usa
- * gerador PDF fiel ao layout do modelo (pdf-lib).
+ * Retorna o documento no formato DOCX para manter a formatação
+ * fiel ao modelo institucional.
  *
- * Sem persistência: temporários em /tmp removidos no finally.
- * CORS habilitado para permitir chamadas do frontend Vercel.
+ * Sem persistência: processamento em memória, sem gravação.
+ * CORS habilitado para chamadas do frontend Vercel.
  * ============================================================ */
 
 import { NextResponse } from 'next/server';
 import mammoth from 'mammoth';
-import { spawn } from 'child_process';
-import { promises as fs } from 'fs';
-import path from 'path';
-import os from 'os';
-import crypto from 'crypto';
 import {
   detectarTipoDocumento,
   validarDocumento,
@@ -27,7 +21,6 @@ import {
   DOC_TYPES,
   DOC_TYPE_LABELS,
 } from '@/lib/normalize';
-import { gerarPdfPadronizado, gerarNomeArquivoSaida } from '@/lib/pdfGenerator';
 import { preencherModeloDocx } from '@/lib/fillTemplate';
 
 export const runtime = 'nodejs';
@@ -35,7 +28,7 @@ export const runtime = 'nodejs';
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 const ALLOWED_EXTENSIONS = ['.pdf', '.docx'];
 
-/* CORS - permite que o frontend (Vercel) chame esta API no Fly.io */
+/* CORS - permite que o frontend (Vercel) chame esta API */
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
@@ -63,40 +56,16 @@ async function extrairTextoDePDF(buffer) {
   return data.text || '';
 }
 
-function run(cmd, args, opts = {}) {
-  return new Promise((resolve, reject) => {
-    const p = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], ...opts });
-    let out = '', err = '';
-    p.stdout.on('data', d => out += d.toString());
-    p.stderr.on('data', d => err += d.toString());
-    p.on('error', reject);
-    p.on('close', code => code === 0 ? resolve({ out, err }) : reject(new Error(`${cmd} ${code}: ${err || out}`)));
-  });
+/* Gera nome de saída com sufixo _padronizado.docx */
+function gerarNomeSaidaDocx(nomeOriginal) {
+  if (!nomeOriginal) return 'documento_padronizado.docx';
+  const base = nomeOriginal.replace(/\.(pdf|docx)$/i, '');
+  const safe = base.replace(/[^a-zA-Z0-9_\-\u00C0-\u00FF ]/g, '_');
+  return `${safe}_padronizado.docx`;
 }
-
-async function hasLibreOffice() {
-  try { await run('soffice', ['--version'], { timeout: 5000 }); return true; }
-  catch { return false; }
-}
-
-async function docxParaPdf(docxBuffer, tmpDir) {
-  const docxPath = path.join(tmpDir, 'preenchido.docx');
-  await fs.writeFile(docxPath, docxBuffer);
-  const env = { ...process.env, HOME: tmpDir };
-  await run('soffice', [
-    '--headless','--norestore','--nolockcheck','--nodefault','--nofirststartwizard',
-    '--convert-to','pdf','--outdir',tmpDir, docxPath,
-  ], { env, timeout: 60000 });
-  const pdfPath = path.join(tmpDir, 'preenchido.pdf');
-  return await fs.readFile(pdfPath);
-}
-
-async function safeRm(dir) { try { await fs.rm(dir, { recursive: true, force: true }); } catch {} }
 
 export async function POST(request) {
-  const tmpDir = path.join(os.tmpdir(), `rcumc-${crypto.randomUUID()}`);
   try {
-    await fs.mkdir(tmpDir, { recursive: true });
     const formData = await request.formData();
     const file = formData.get('file');
     const tipoDocumentoForm = formData.get('tipoDocumento');
@@ -127,23 +96,10 @@ export async function POST(request) {
 
     const diagnostico = validarDocumento(textoExtraido, tipoDocumento);
 
-    // 1) Preenche o modelo DOCX oficial da pasta /models
+    // Preenche o modelo DOCX oficial da pasta /models (preserva formatação)
     const docxBuffer = await preencherModeloDocx(tipoDocumento, textoExtraido);
 
-    // 2) Converte para PDF: LibreOffice (fiel ao modelo) ou fallback pdf-lib
-    let pdfBytes;
-    if (await hasLibreOffice()) {
-      try {
-        pdfBytes = await docxParaPdf(docxBuffer, tmpDir);
-      } catch (e) {
-        console.warn('Falha LibreOffice, usando fallback pdf-lib:', e.message);
-        pdfBytes = Buffer.from(await gerarPdfPadronizado(textoExtraido, tipoDocumento, { nomeOriginal }));
-      }
-    } else {
-      pdfBytes = Buffer.from(await gerarPdfPadronizado(textoExtraido, tipoDocumento, { nomeOriginal }));
-    }
-
-    const nomeSaida = gerarNomeArquivoSaida(nomeOriginal);
+    const nomeSaida = gerarNomeSaidaDocx(nomeOriginal);
     const diagnosticoHeader = Buffer.from(JSON.stringify({
       tipo: tipoDocumento,
       tipoLabel: DOC_TYPE_LABELS[tipoDocumento],
@@ -152,13 +108,13 @@ export async function POST(request) {
       conformidades: diagnostico.conformidades,
     }), 'utf-8').toString('base64');
 
-    return new NextResponse(pdfBytes, {
+    return new NextResponse(docxBuffer, {
       status: 200,
       headers: {
         ...CORS_HEADERS,
-        'Content-Type': 'application/pdf',
+        'Content-Type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
         'Content-Disposition': `attachment; filename="${encodeURIComponent(nomeSaida)}"`,
-        'Content-Length': String(pdfBytes.length),
+        'Content-Length': String(docxBuffer.length),
         'X-Diagnostico': diagnosticoHeader,
         'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
         'Pragma': 'no-cache', 'Expires': '0',
@@ -167,7 +123,5 @@ export async function POST(request) {
   } catch (error) {
     console.error('Erro na conversão:', error);
     return NextResponse.json({ error: 'Erro interno ao processar o documento. Verifique se o arquivo não está corrompido ou protegido por senha.' }, { status: 500, headers: CORS_HEADERS });
-  } finally {
-    await safeRm(tmpDir);
   }
 }

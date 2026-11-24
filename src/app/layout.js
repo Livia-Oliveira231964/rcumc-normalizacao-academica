@@ -15,7 +15,7 @@ import './globals.css';
 export const metadata = {
   title: 'RCUMC - Normalização Acadêmica UMC',
   description:
-    'RCUMC - Sistema de normalização de documentos acadêmicos da UMC. Envie seu arquivo PDF ou DOCX e baixe o documento padronizado.',
+    'RCUMC - Sistema de normalização de documentos acadêmicos da UMC. Envie seu arquivo PDF ou DOCX e baixe o documento padronizado em DOCX no modelo oficial.',
 };
 
 /* ------------------------------------------------------------

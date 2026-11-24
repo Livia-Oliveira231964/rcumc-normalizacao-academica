@@ -4,7 +4,7 @@
  * Interface para o aluno:
  *   1. Selecionar tipo de documento
  *   2. Enviar arquivo PDF ou DOCX
- *   3. Baixar o PDF padronizado
+ *   3. Baixar o DOCX padronizado
  *
  * Nenhum arquivo é armazenado - o processamento é feito
  * pela API (Fly.io com LibreOffice para fidelidade ao modelo)
@@ -159,7 +159,7 @@ export default function HomePage() {
       // Extrai nome do arquivo do header Content-Disposition
       const disposition = response.headers.get('Content-Disposition') || '';
       const match = disposition.match(/filename="?([^";]+)"?/i);
-      const nomeSaida = match ? decodeURIComponent(match[1]) : 'documento_padronizado.pdf';
+      const nomeSaida = match ? decodeURIComponent(match[1]) : 'documento_padronizado.docx';
 
       setDownloadUrl(url);
       setDownloadName(nomeSaida);
@@ -193,8 +193,8 @@ export default function HomePage() {
           <span className="badge">RCUMC • UMC • Normalização Acadêmica</span>
           <h1>Padronize seu documento acadêmico</h1>
           <p>
-            Envie seu arquivo em PDF ou DOCX e receba uma versão padronizada em PDF,
-            seguindo as diretrizes institucionais da UMC. Seus arquivos não são armazenados.
+            Envie seu arquivo em PDF ou DOCX e receba uma versão padronizada em DOCX,
+            preenchida no modelo oficial da RCUMC. Seus arquivos não são armazenados.
           </p>
         </div>
       </header>
@@ -206,7 +206,7 @@ export default function HomePage() {
             <h2 className="section-title">Enviar documento</h2>
             <p className="section-desc">
               Selecione o tipo de documento (ou deixe em detecção automática), envie o
-              arquivo e clique em &quot;Converter e baixar PDF&quot;.
+              arquivo e clique em &quot;Converter e baixar DOCX&quot;.
             </p>
 
             <form onSubmit={handleSubmit} className="form-grid">
@@ -257,7 +257,7 @@ export default function HomePage() {
               <div className="actions">
                 <button type="submit" className="btn btn-primary" disabled={loading || !file}>
                   {loading && <span className="spinner" aria-hidden="true" />}
-                  {loading ? 'Convertendo...' : 'Converter e baixar PDF'}
+                  {loading ? 'Convertendo...' : 'Converter e baixar DOCX'}
                 </button>
                 <button
                   type="button"
@@ -293,7 +293,7 @@ export default function HomePage() {
                     href={downloadUrl}
                     download={downloadName}
                   >
-                    Baixar PDF
+                    Baixar DOCX
                   </a>
                 </div>
 
@@ -341,11 +341,11 @@ export default function HomePage() {
               </div>
               <div className="info-item">
                 <h3>2. Processamento</h3>
-                <p>O sistema preenche o modelo oficial RCUMC e aplica a padronização.</p>
+                <p>O sistema preenche o modelo oficial RCUMC preservando a formatação do template.</p>
               </div>
               <div className="info-item">
                 <h3>3. Baixe</h3>
-                <p>Receba o PDF padronizado pronto para download. Nada é armazenado.</p>
+                <p>Receba o DOCX padronizado no modelo oficial, pronto para download. Nada é armazenado.</p>
               </div>
             </div>
             <div className="alert alert-info" style={{ marginTop: '1rem' }}>
