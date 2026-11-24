@@ -4,7 +4,7 @@ Sistema web para normalização de documentos acadêmicos da UMC. Permite que o 
 
 ## Site
 
-- **Acesso**: https://rcum-normalizacao-academica.vercel.app
+- **Acesso**: https://rcumc-normalizacao-academica.vercel.app
 
 ## O que o sistema faz
 
