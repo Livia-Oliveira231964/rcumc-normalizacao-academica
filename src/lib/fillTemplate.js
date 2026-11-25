@@ -63,7 +63,7 @@ function parseSections(text) {
   for (const k of Object.keys(sections)) {
     sections[k] = sections[k]
       .replace(/Revista\s+Cient[ií]fica\s+UMC\s*\|\s*RCUMC\s*\|\s*ISSN:\s*2525-5150/gi, '')
-      .replace(/RCUMC\s*\|\s*Vol\.\s*\d+\s*\|\s*N\.\s*\d+\s*\|\s*Ano\s*\d+\s*\|?/gi, '')
+      .replace(/RCUMC\s*\|\s*Vol\.?\s*\d*\s*\|\s*N\.?\s*\d*\s*\|\s*Ano\s*\d*\s*\|?/gi, '')
       .replace(/P[áa]gina\s*\d+\s*(de\s*\d+)?/gi, '')
       .replace(/Page\s*\d+\s*(of\s*\d+)?/gi, '')
       .replace(/^\s*\d{1,3}\s*$/gm, '')
@@ -161,6 +161,18 @@ function fillParaTextKeepStyle(pXml, text) {
   return `<w:p>${pPr}<w:r>${bodyRPr}${WT}${esc(clean)}</w:t></w:r></w:p>`;
 }
 
+function cleanArtifacts(text='') {
+  return String(text)
+    .replace(/Revista\s+Cient[ií]fica\s+UMC\s*\|\s*RCUMC\s*\|\s*ISSN:\s*2525-5150/gi, '')
+    .replace(/RCUMC\s*\|\s*Vol\.?\s*\d*\s*\|\s*N\.?\s*\d*\s*\|\s*Ano\s*\d*\s*\|?/gi, '')
+    .replace(/P[áa]gina\s*\d+\s*(de\s*\d+)?/gi, '')
+    .replace(/Page\s*\d+\s*(of\s*\d+)?/gi, '')
+    .replace(/^\s*\d{1,3}\s*$/gm, '')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 function makeParaFromTemplate(templateParaXml, text, opts = {}) {
   let pPr = getPPr(templateParaXml);
   if (opts.pageBreakBefore) {
@@ -168,7 +180,7 @@ function makeParaFromTemplate(templateParaXml, text, opts = {}) {
     else pPr = pPr.replace(/<\/w:pPr>/, '<w:pageBreakBefore/></w:pPr>');
   }
   const rPr = getCleanRPr(templateParaXml);
-  const raw = String(text ?? '');
+  const raw = cleanArtifacts(String(text ?? ''));
   // For "Label: value" keep label bold, value normal when template bold.
   const lm = raw.match(/^([^:\n]{2,80}:)\s*([\s\S]*)$/);
   const hasBold = /<w:b\/>|<w:b\s/.test(rPr);
@@ -264,6 +276,7 @@ function buildResumoSimplesFromTemplate(paras, sections) {
   emit(pKwH, 'Palavras-chave');
   emit(pKwV, sections.palavras_chave || '');
   emitBlank();
+  emitBlank();
   emit(pTitleEnH, 'Title in English', { pageBreakBefore: true });
   emit(pTitleEnV, sections.titulo_en || 'Title of the article in english.');
   emitBlank();
@@ -272,6 +285,7 @@ function buildResumoSimplesFromTemplate(paras, sections) {
   emitBlank();
   emit(pKwsH, 'Keywords');
   emit(pKwsV, sections.keywords || '');
+  emitBlank();
   emitBlank();
   emit(pTituloEsH, 'Título en Español', { pageBreakBefore: true });
   emit(pTituloEsV, sections.titulo_es || 'Título del artículo en español.');
