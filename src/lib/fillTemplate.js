@@ -62,8 +62,10 @@ function parseSections(text) {
   // Remove header/footer artifacts that may have leaked into extracted text
   for (const k of Object.keys(sections)) {
     sections[k] = sections[k]
-      .replace(/Revista\s+Cientifica\s+UMC\s*\|\s*RCUMC\s*\|\s*ISSN:\s*2525-5150/gi, '')
+      .replace(/Revista\s+Cient[ií]fica\s+UMC\s*\|\s*RCUMC\s*\|\s*ISSN:\s*2525-5150/gi, '')
       .replace(/RCUMC\s*\|\s*Vol\.\s*\d+\s*\|\s*N\.\s*\d+\s*\|\s*Ano\s*\d+\s*\|?/gi, '')
+      .replace(/^\s*\d+\s*$/gm, '') // isolated page numbers
+      .replace(/\n{3,}/g, '\n\n')
       .trim();
   }
   return sections;
@@ -90,8 +92,21 @@ function getPStyle(pXml) {
 /* get first run rPr, stripping highlight (template instructional highlight) */
 function getCleanRPr(pXml) {
   const m = pXml.match(/<w:rPr[\s\S]*?<\/w:rPr>/);
-  if (!m) return '<w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/></w:rPr>';
-  return m[0].replace(/<w:highlight[^>]*\/>/g, '').replace(/<w:highlight[\s\S]*?<\/w:highlight>/g, '');
+  let rPr = m ? m[0] : '<w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/></w:rPr>';
+  rPr = rPr.replace(/<w:highlight[^>]*\/>/g, '').replace(/<w:highlight[\s\S]*?<\/w:highlight>/g, '');
+  // Heading styles in templates rely on style for bold; ensure explicit bold for headings
+  const style = getPStyle(pXml).toLowerCase();
+  // don't force bold - rely on template style/rPr to avoid "tudo em negrito"
+
+  return rPr;
+}
+
+function isCleanBlank(p) {
+  if (p.txt) return false;
+  const rPr = (p.xml.match(/<w:rPr[\s\S]*?<\/w:rPr>/) || [''])[0];
+  // avoid blanks carrying large title font sizes
+  if (/w:val="(28|32|36|40|48)"/.test(rPr)) return false;
+  return true;
 }
 
 function makeParaFromTemplate(templateParaXml, text) {
@@ -102,8 +117,6 @@ function makeParaFromTemplate(templateParaXml, text) {
     const br = i < lines.length - 1 ? '<w:br/>' : '';
     return `<w:r>${rPr}${WT}${esc(line)}</w:t>${br}</w:r>`;
   }).join('');
-  // keep any bookmarks/rPrChange? no, safer to rebuild para with pPr + runs
-  // but preserve w:p attributes? rare. keep simple.
   const pAttrs = (templateParaXml.match(/^<w:p(\s[^>]*)?>/) || ['<w:p>'])[0];
   const openTag = pAttrs.startsWith('<w:p ') ? pAttrs : '<w:p>';
   return `${openTag}${pPr}${runs}</w:p>`;
@@ -158,8 +171,8 @@ function buildResumoSimplesFromTemplate(paras, sections) {
   const pPcV = paras.find(p => p.norm.includes('cinco descriptores') && (p.norm.includes('tematica del estudio') || p.norm.includes('tema del trabajo')));
 
   // pick a blank spacer template (prefer body/no-style blank)
-  // blank spacer: prefer truly empty body paragraph (no pStyle)
-  const blank = paras.find(p => !p.txt && !p.style) || paras.find(p => !p.txt && !/ttulo|titulo|heading/i.test(p.style)) || pResumoV;
+  // blank spacer: prefer clean body blank without title font sizing
+  const blank = paras.find(p => isCleanBlank(p) && !p.style) || paras.find(p => isCleanBlank(p)) || paras.find(p => !p.txt) || pResumoV;
 
   const out = [];
   const emit = (tpl, text) => { if (tpl) out.push(makeParaFromTemplate(tpl.xml, text)); };
@@ -198,7 +211,7 @@ function buildResumoSimplesFromTemplate(paras, sections) {
 function buildResumoExpandidoFromTemplate(paras, sections) {
   const byNorm = (n) => paras.find(p => p.norm === n);
   const byNormIncl = (n) => paras.find(p => p.norm.includes(n));
-  const blank = paras.find(p => !p.txt) || paras[paras.length-1];
+  const blank = paras.find(p => isCleanBlank(p)) || paras.find(p => !p.txt) || paras[paras.length-1];
   const heading = paras.find(p => p.style.toLowerCase().includes('ttulo2') || p.style.toLowerCase().includes('titulo2')) || paras.find(p => p.norm==='resumo');
   const body = paras.find(p => p.norm.includes('estruturado em um unico paragrafo') || p.norm.includes('o resumo expandido')) || paras.find(p => !p.style && p.txt.length>30);
 
@@ -239,6 +252,138 @@ function buildGenericFromTemplate(paras, sections) {
   return out.join('') || (body ? makeParaFromTemplate(body.xml, '') : '');
 }
 
+function fillParaTextKeepStyle(pXml, text) {
+  const pPr = getPPr(pXml);
+  const rPr = getCleanRPr(pXml);
+  const lines = String(text ?? '').split('\n');
+  const runs = lines.map((line, i) => {
+    const br = i < lines.length - 1 ? '<w:br/>' : '';
+    return `<w:r>${rPr}${WT}${esc(line)}</w:t>${br}</w:r>`;
+  }).join('');
+  const pAttrs = (pXml.match(/^<w:p(\s[^>]*)?>/) || ['<w:p>'])[0];
+  const openTag = pAttrs.startsWith('<w:p ') ? pAttrs : '<w:p>';
+  return `${openTag}${pPr}${runs}</w:p>`;
+}
+
+function replaceTableCellText(tblXml, rowIdx, colIdx, text) {
+  // simplistic: replace text in nth row/col tc
+  let trCount = -1;
+  return tblXml.replace(/<w:tr\b[\s\S]*?<\/w:tr>/g, (tr) => {
+    trCount++;
+    if (trCount !== rowIdx) return tr;
+    let tcCount = -1;
+    return tr.replace(/<w:tc\b[\s\S]*?<\/w:tc>/g, (tc) => {
+      tcCount++;
+      if (tcCount !== colIdx) return tc;
+      // replace all <w:p> inside tc with one paragraph keeping first para style
+      const firstP = (tc.match(/<w:p\b[\s\S]*?<\/w:p>/) || ['<w:p><w:pPr/><w:r><w:rPr/><w:t></w:t></w:r></w:p>'])[0];
+      const newP = fillParaTextKeepStyle(firstP, text);
+      return tc.replace(/<w:p\b[\s\S]*?<\/w:p>/g, '').replace(/(<w:tcPr[\s\S]*?<\/w:tcPr>)/, `$1${newP}`).replace(/(<w:tc\b[^>]*>)/, (m, open) => tc.includes('<w:tcPr') ? m : m);
+    });
+  });
+}
+
+function buildFolhaRostoFromTemplate(bodyInner, paras, sections) {
+  const blockRe = /<w:p\b[\s\S]*?<\/w:p>|<w:tbl\b[\s\S]*?<\/w:tbl>|<w:sectPr\b[\s\S]*?<\/w:sectPr>/g;
+  const blocks = bodyInner.match(blockRe) || [];
+  const getText = (b) => { const re=/<w:t[^>]*>([\s\S]*?)<\/w:t>/g; let m,out=''; while((m=re.exec(b))) out+=m[1]; return out.replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').trim(); };
+  const norm = (s) => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+
+  const raw = String(Object.entries(sections).map(([k,v]) => v ? `${k}\n${v}` : '').join('\n'));
+  const rawLines = raw.split(/\n/).map(l=>l.trim()).filter(Boolean);
+  const findField = (res) => {
+    for (const re of res) {
+      const m = raw.match(re);
+      if (m && m[1]) return m[1].trim();
+    }
+    return '';
+  };
+
+  const tituloPt = findField([/T[íi]tulo em Portugu[eê]s\s*[:\-]\s*(.+)/i]) || sections.titulo_pt || sections._preamble?.split('\n')[0] || '';
+  const tituloEn = findField([/T[íi]tulo em Ingl[eê]s\s*[:\-]\s*(.+)/i, /Title in English\s*[:\-]\s*(.+)/i]) || sections.titulo_en || '';
+  const tituloEs = findField([/T[íi]tulo em Espanhol\s*[:\-]\s*(.+)/i, /T[íi]tulo en Espa[nñ]ol\s*[:\-]\s*(.+)/i]) || sections.titulo_es || '';
+  const categoria = findField([/Categoria de Publica[cç][aã]o\s*[:\-]\s*(.+)/i]);
+  const tipoPub = findField([/Tipo de Publica[cç][aã]o\s*[:\-]\s*(.+)/i]);
+  const area = findField([/[ÁA]rea do Conhecimento\s*[:\-]\s*(.+)/i]);
+
+  // Parse authors from lines containing email/orcid/name patterns
+  const authors = [];
+  for (const line of rawLines) {
+    const email = (line.match(/[\w.+-]+@[\w.-]+\.[a-z]{2,}/i)||[''])[0];
+    const orcid = (line.match(/https?:\/\/orcid\.org\/[\dXx-]+/i)||line.match(/\b\d{4}-\d{4}-\d{4}-[\dXx]{4}\b/)||[''])[0];
+    if (email || orcid) {
+      let name = line.replace(email,'').replace(orcid,'').replace(/Nome\s*[:\-]/i,'').replace(/E-?mail\s*[:\-]/i,'').replace(/ORCID\s*[:\-]/i,'').replace(/[;|]+/g,' ').replace(/\s{2,}/g,' ').replace(/^[\s\-*,]+|[\s\-*,]+$/g,'').trim();
+      authors.push({ name, email, orcid: orcid && !orcid.startsWith('http') ? `https://orcid.org/${orcid}` : orcid });
+    }
+  }
+
+  // Remove instruction section and trailing notes
+  let cutIdx = blocks.findIndex(b => norm(getText(b)).includes('instrucoes para preenchimento'));
+  if (cutIdx === -1) cutIdx = blocks.findIndex(b => norm(getText(b)).includes('essa pagina pode ser removida'));
+  let kept = cutIdx > 0 ? blocks.slice(0, cutIdx) : blocks.slice();
+  kept = kept.filter(b => {
+    const t = norm(getText(b));
+    if (t.includes('essa pagina pode ser removida')) return false;
+    if (t.startsWith('observacao: a formatacao e o conteudo')) return false;
+    return true;
+  });
+  while (kept.length && /<w:p\b/.test(kept[kept.length-1]) && !getText(kept[kept.length-1]).trim()) kept.pop();
+
+  const filled = kept.map(b => {
+    if (/<w:tbl\b/.test(b)) {
+      let tbl = b;
+      if (authors.length) {
+        // clear template sample rows 1..n and fill with authors
+        const trMatches = [...tbl.matchAll(/<w:tr\b[\s\S]*?<\/w:tr>/g)];
+        // Replace rows after header (index 0) - rebuild table: keep header row, add author rows
+        if (trMatches.length > 1) {
+          const header = trMatches[0][0];
+          // build author rows by cloning row 1 as template
+          const rowTpl = trMatches[1][0];
+          const authorRows = authors.slice(0, 12).map(a => {
+            let row = rowTpl;
+            row = replaceTableCellText(row, 0, 0, a.name || '');
+            row = replaceTableCellText(row, 0, 1, a.email || '');
+            row = replaceTableCellText(row, 0, 2, a.orcid || '');
+            return row;
+          }).join('');
+          tbl = tbl.replace(/<w:tr\b[\s\S]*?<\/w:tr>/g, (m) => {
+            // replace first occurrence with header+authors, drop rest
+            return '\x00';
+          });
+          const parts = tbl.split('\x00');
+          // parts[0] before first tr, parts[1] between tr1-tr2 etc., last after last tr
+          tbl = parts[0] + header + authorRows + parts[parts.length - 1];
+        }
+      }
+      return tbl;
+    }
+    const t = getText(b);
+    const n = norm(t);
+    if (n.startsWith('titulo em portugues:') || n.startsWith('titulo em portugues :')) {
+      return fillParaTextKeepStyle(b, `Título em Português: ${tituloPt || t.replace(/^[^:]*:\s*/,'')}`);
+    }
+    if (n.startsWith('titulo em ingles:') || n.startsWith('titulo em ingles :')) {
+      return fillParaTextKeepStyle(b, `Título em Inglês: ${tituloEn || t.replace(/^[^:]*:\s*/,'')}`);
+    }
+    if (n.startsWith('titulo em espanhol:') || n.startsWith('titulo em espanhol :')) {
+      return fillParaTextKeepStyle(b, `Título em Espanhol: ${tituloEs || t.replace(/^[^:]*:\s*/,'')}`);
+    }
+    if (n.startsWith('categoria de publicacao')) {
+      return categoria ? fillParaTextKeepStyle(b, `Categoria de Publicação: ${categoria}`) : b;
+    }
+    if (n.startsWith('tipo de publicacao')) {
+      return tipoPub ? fillParaTextKeepStyle(b, `Tipo de Publicação: ${tipoPub}`) : b;
+    }
+    if (n.startsWith('area do conhecimento')) {
+      return area ? fillParaTextKeepStyle(b, `Área do Conhecimento: ${area}`) : b;
+    }
+    return b;
+  });
+
+  return filled.join('');
+}
+
 export async function preencherModeloDocx(tipoDocumento, texto) {
   const modelMap = {
     [DOC_TYPES.RESUMO_SIMPLES]: 'Modelo-Resumo-simples.docx',
@@ -264,6 +409,7 @@ export async function preencherModeloDocx(tipoDocumento, texto) {
   let bodyContent = '';
   if (tipoDocumento === DOC_TYPES.RESUMO_SIMPLES) bodyContent = buildResumoSimplesFromTemplate(paras, sections);
   else if (tipoDocumento === DOC_TYPES.RESUMO_EXPANDIDO) bodyContent = buildResumoExpandidoFromTemplate(paras, sections);
+  else if (tipoDocumento === DOC_TYPES.FOLHA_ROSTO || tipoDocumento === DOC_TYPES.CARTA_APRESENTACAO) bodyContent = buildFolhaRostoFromTemplate(bodyInner, paras, sections);
   else bodyContent = buildGenericFromTemplate(paras, sections);
 
   const sectPara = sectPr ? `<w:p><w:pPr>${sectPr}</w:pPr></w:p>` : '';

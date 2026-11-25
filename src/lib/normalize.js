@@ -247,13 +247,28 @@ export function validarDocumento(texto, tipoDocumento) {
 }
 
 /* ------------------------------------------------------------
+ * FUNÇÃO: removerArtefatosLayout
+ * ------------------------------------------------------------
+ * Remove artefatos de cabeçalho/rodapé que vazam na extração
+ * de PDF/DOCX (RCUMC), sem alterar conteúdo acadêmico.
+ * ------------------------------------------------------------ */
+export function removerArtefatosLayout(texto) {
+  if (!texto || typeof texto !== 'string') return '';
+  return texto
+    .replace(/Revista\s+Cient[ií]fica\s+UMC\s*\|\s*RCUMC\s*\|\s*ISSN:\s*2525-5150/gi, '')
+    .replace(/RCUMC\s*\|\s*Vol\.\s*\d+\s*\|\s*N\.\s*\d+\s*\|\s*Ano\s*\d+\s*\|?/gi, '')
+    .replace(/(^|\n)\s*\d{1,3}\s*(?=\n|$)/g, '$1') // números de página isolados
+    .replace(/\n{3,}/g, '\n\n');
+}
+
+/* ------------------------------------------------------------
  * FUNÇÃO: normalizarTextoBasico
  * ------------------------------------------------------------
  * Aplica normalizações textuais seguras e não-destrutivas:
  * - Limpa espaços excessivos
- * - Garante encoding UTF-8 consistente (já tratado em JS)
+ * - Remove artefatos de cabeçalho/rodapé RCUMC
  * - Normaliza quebras de linha
  * ------------------------------------------------------------ */
 export function normalizarTextoBasico(texto) {
-  return limparTexto(texto);
+  return limparTexto(removerArtefatosLayout(texto));
 }
