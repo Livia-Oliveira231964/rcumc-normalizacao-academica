@@ -379,15 +379,49 @@ function buildFolhaRostoFromTemplate(bodyInner, paras, sections) {
     return '';
   };
 
-  const cleanField = (s) => {
-    const v = cleanArtifacts(String(s || '').replace(/^[^:]*:\s*/, ''));
+  // Limpa campo extraído; remove placeholders do template quando não há valor real
+  const cleanField = (s, { stripLabel = false } = {}) => {
+    let v = String(s || '');
+    if (stripLabel) v = v.replace(/^[^:\n]{1,60}:\s*/, '');
+    v = cleanArtifacts(v);
     if (!v) return '';
     if (/insira aqui o t[íi]tulo|title of the article|t[íi]tulo del art[íi]culo|nome da institui|cidade,\s*estado,\s*pa[íi]s/i.test(v)) return '';
     return v;
   };
-  const tituloPt = cleanField(findField([/T[íi]tulo em Portugu[eê]s\s*[:\-]\s*(.+)/i]) || sections.titulo_pt || sections._preamble?.split('\n')[0] || '');
-  const tituloEn = cleanField(findField([/T[íi]tulo em Ingl[eê]s\s*[:\-]\s*(.+)/i, /Title in English\s*[:\-]\s*(.+)/i]) || sections.titulo_en || '');
-  const tituloEs = cleanField(findField([/T[íi]tulo em Espanhol\s*[:\-]\s*(.+)/i, /T[íi]tulo en Espa[nñ]ol\s*[:\-]\s*(.+)/i]) || sections.titulo_es || '');
+
+  // Extrai títulos rotulados; fallback para linhas sem rótulo (comum em PDF/itálico)
+  let tituloPt = cleanField(findField([/T[íi]tulo em Portugu[eê]s\s*[:\-]\s*(.+)/i]) || sections.titulo_pt || '', { stripLabel: true });
+  let tituloEn = cleanField(findField([/T[íi]tulo em Ingl[eê]s\s*[:\-]\s*(.+)/i, /Title in English\s*[:\-]\s*(.+)/i]) || sections.titulo_en || '', { stripLabel: true });
+  let tituloEs = cleanField(findField([/T[íi]tulo em Espanhol\s*[:\-]\s*(.+)/i, /T[íi]tulo en Espa[nñ]ol\s*[:\-]\s*(.+)/i]) || sections.titulo_es || '', { stripLabel: true });
+
+  if (!tituloPt || !tituloEn || !tituloEs) {
+    // Reconstitui blocos de título a partir das linhas do preâmbulo (PDF quebra linhas)
+    const preambleRaw = Array.isArray(sections._preamble) ? sections._preamble.join('\n') : String(sections._preamble || '');
+    const preambleLines = preambleRaw
+      .split(/\n/)
+      .map(l => cleanArtifacts(l))
+      .filter(l => !/^(autores?|nome\s+e-?mail|orcid|capa do artigo|institui[cç][oõ]es|informa[cç][oõ]es|categoria|tipo de publica|[áa]rea do conhecimento)$/i.test(l))
+      .filter(l => !/@/.test(l) && !/https?:\/\//i.test(l));
+    const blocks = [];
+    let cur = [];
+    for (const l of preambleLines) {
+      if (!l.trim()) { if (cur.length) { blocks.push(cur.join(' ').replace(/\s{2,}/g,' ').trim()); cur = []; } continue; }
+      cur.push(l.trim());
+    }
+    if (cur.length) blocks.push(cur.join(' ').replace(/\s{2,}/g,' ').trim());
+    // If extraction collapsed titles into one block, split by common PT/EN/ES title starts
+    let titleBlocks = blocks
+      .filter(b => b && b.length > 25 && !/^\d+\./.test(b) && !/Resumo Expandido|Summit|Congresso/i.test(b));
+    if (titleBlocks.length === 1) {
+      const one = titleBlocks[0];
+      const m = one.match(/^(.*?)(Motivations?,.*?)(Motivaciones?,.*)$/i);
+      if (m) titleBlocks = [m[1], m[2], m[3]].map(s => s.trim()).filter(Boolean);
+    }
+    titleBlocks = titleBlocks.map(b => cleanField(b)).filter(Boolean).slice(0, 3);
+    if (!tituloPt && titleBlocks[0]) tituloPt = titleBlocks[0];
+    if (!tituloEn && titleBlocks[1]) tituloEn = titleBlocks[1];
+    if (!tituloEs && titleBlocks[2]) tituloEs = titleBlocks[2];
+  }
   const categoria = findField([/Categoria de Publica[cç][aã]o\s*[:\-]\s*(.+)/i]);
   const tipoPub = findField([/Tipo de Publica[cç][aã]o\s*[:\-]\s*(.+)/i]);
   const area = findField([/[ÁA]rea do Conhecimento\s*[:\-]\s*(.+)/i]);
