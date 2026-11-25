@@ -91,7 +91,12 @@ export async function POST(request) {
 
     let tipoDocumento = tipoDocumentoForm;
     if (!Object.values(DOC_TYPES).includes(tipoDocumento)) {
-      tipoDocumento = detectarTipoDocumento(textoExtraido) || DOC_TYPES.RESUMO_SIMPLES;
+      const hintNome = (nomeOriginal || '').toLowerCase();
+      if (hintNome.includes('folha') && hintNome.includes('rosto')) tipoDocumento = DOC_TYPES.FOLHA_ROSTO;
+      else if (hintNome.includes('carta') && hintNome.includes('apresent')) tipoDocumento = DOC_TYPES.CARTA_APRESENTACAO;
+      else if (hintNome.includes('expandido')) tipoDocumento = DOC_TYPES.RESUMO_EXPANDIDO;
+      else if (hintNome.includes('resumo')) tipoDocumento = DOC_TYPES.RESUMO_SIMPLES;
+      else tipoDocumento = detectarTipoDocumento(textoExtraido) || DOC_TYPES.RESUMO_SIMPLES;
     }
 
     const diagnostico = validarDocumento(textoExtraido, tipoDocumento);

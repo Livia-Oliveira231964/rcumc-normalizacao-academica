@@ -128,19 +128,25 @@ export function detectarTipoDocumento(texto) {
   if (t.includes('carta de apresentação') || t.includes('carta de apresentacao')) {
     return DOC_TYPES.CARTA_APRESENTACAO;
   }
-  if (t.includes('folha de rosto')) {
+  if (t.includes('folha de rosto') || (t.includes('capa do artigo') && t.includes('autores') && t.includes('instituições'))) {
     return DOC_TYPES.FOLHA_ROSTO;
   }
-  if (t.includes('resumo expandido') || t.includes('abstract') && t.includes('resumen') && t.includes('introdução')) {
+  if (t.includes('resumo expandido') || (t.includes('abstract') && t.includes('resumen') && t.includes('introdução'))) {
     return DOC_TYPES.RESUMO_EXPANDIDO;
   }
-  if (t.includes('resumo simples') || (t.includes('palavras-chave') && t.includes('resumo'))) {
+  if (t.includes('resumo simples')) {
     return DOC_TYPES.RESUMO_SIMPLES;
   }
 
-  // Fallback: se tem abstract/resumen provavelmente é expandido
+  // Fallback heurístico: folha de rosto costuma ter tabela de autores/instituições/categoria
+  if ((t.includes('autores') || t.includes('autor correspondente')) && t.includes('instituições') && t.includes('área do conhecimento')) {
+    return DOC_TYPES.FOLHA_ROSTO;
+  }
   if (t.includes('abstract') && t.includes('resumen')) {
     return DOC_TYPES.RESUMO_EXPANDIDO;
+  }
+  if (t.includes('palavras-chave') && t.includes('resumo')) {
+    return DOC_TYPES.RESUMO_SIMPLES;
   }
 
   return null;
