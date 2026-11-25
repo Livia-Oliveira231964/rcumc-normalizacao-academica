@@ -63,7 +63,7 @@ function parseSections(text) {
   for (const k of Object.keys(sections)) {
     sections[k] = sections[k]
       .replace(/Revista\s+Cient[ií]fica\s+UMC\s*\|\s*RCUMC\s*\|\s*ISSN:\s*2525-5150/gi, '')
-      .replace(/RCUMC\s*\|\s*Vol\.?\s*\d*\s*\|\s*N\.?\s*\d*\s*\|\s*Ano\s*\d*\s*\|?/gi, '')
+      .replace(/RCUMC\s*\|\s*Vol\.?\s*[^\s|]*\s*\|\s*N\.?\s*[^\s|]*\s*\|\s*Ano\s*[^\s|]*\s*\|?/gi, '')
       .replace(/P[áa]gina\s*\d+\s*(de\s*\d+)?/gi, '')
       .replace(/Page\s*\d+\s*(of\s*\d+)?/gi, '')
       .replace(/^\s*\d{1,3}\s*$/gm, '')
@@ -164,7 +164,7 @@ function fillParaTextKeepStyle(pXml, text) {
 function cleanArtifacts(text='') {
   return String(text)
     .replace(/Revista\s+Cient[ií]fica\s+UMC\s*\|\s*RCUMC\s*\|\s*ISSN:\s*2525-5150/gi, '')
-    .replace(/RCUMC\s*\|\s*Vol\.?\s*\d*\s*\|\s*N\.?\s*\d*\s*\|\s*Ano\s*\d*\s*\|?/gi, '')
+    .replace(/RCUMC\s*\|\s*Vol\.?\s*[^\s|]*\s*\|\s*N\.?\s*[^\s|]*\s*\|\s*Ano\s*[^\s|]*\s*\|?/gi, '')
     .replace(/P[áa]gina\s*\d+\s*(de\s*\d+)?/gi, '')
     .replace(/Page\s*\d+\s*(of\s*\d+)?/gi, '')
     .replace(/^\s*\d{1,3}\s*$/gm, '')
@@ -388,12 +388,15 @@ function buildFolhaRostoFromTemplate(bodyInner, paras, sections) {
 
   // Parse authors from lines containing email/orcid/name patterns
   const authors = [];
+  const junkAuthor = (s) => /^(autores?|nome|e-?mail|orcid|rcumc|vol\.|n\.|ano|issn|t[íi]tulo|resumo|abstract|keywords?|palavras)/i.test(String(s||'').trim()) || /RCUMC\s*\|/i.test(String(s||''));
   // Try structured lines first
   for (const line of rawLines) {
     const email = (line.match(/[\w.+-]+@[\w.-]+\.[a-z]{2,}/i)||[''])[0];
     const orcid = (line.match(/https?:\/\/orcid\.org\/[\dXx-]+/i)||line.match(/\b\d{4}-\d{4}-\d{4}-[\dXx]{4}\b/)||[''])[0];
     if (email || orcid) {
       let name = line.replace(email,'').replace(orcid,'').replace(/Nome\s*[:\-]/i,'').replace(/E-?mail\s*[:\-]/i,'').replace(/ORCID\s*[:\-]/i,'').replace(/[;|]+/g,' ').replace(/\s{2,}/g,' ').replace(/^[\s\-*,0-9]+|[\s\-*,]+$/g,'').trim();
+      name = cleanArtifacts(name);
+      if (junkAuthor(name)) name = '';
       const normOrcid = orcid && !orcid.startsWith('http') ? `https://orcid.org/${orcid}` : orcid;
       authors.push({ name, email, orcid: normOrcid });
     }
@@ -403,7 +406,10 @@ function buildFolhaRostoFromTemplate(bodyInner, paras, sections) {
     const emails = raw.match(/[\w.+-]+@[\w.-]+\.[a-z]{2,}/gi) || [];
     const orcids = raw.match(/https?:\/\/orcid\.org\/[\dXx-]+|\b\d{4}-\d{4}-\d{4}-[\dXx]{4}\b/gi) || [];
     // names: lines before emails that look like person names
-    const nameCandidates = rawLines.filter(l => !/@/.test(l) && !/orcid/i.test(l) && !/Nome\s*E-mail/i.test(l) && !/^\d+[.\s]/.test(l) && l.length > 3 && l.length < 80 && !/Universidade|Institui|Categoria|Tipo de Publica|Área do Conhecimento|Capa do Artigo|Título|Autor Correspondente|Informações/i.test(l));
+    const nameCandidates = rawLines
+      .map(l => cleanArtifacts(l))
+      .filter(l => l && !/@/.test(l) && !/orcid/i.test(l) && !/Nome\s*E-mail/i.test(l) && !/^Autores$/i.test(l) && l.length > 3 && l.length < 90 && !junkAuthor(l) && !/Universidade|Institui|Categoria|Tipo de Publica|Área do Conhecimento|Capa do Artigo|Autor Correspondente|Informações|Resumo Expandido|Pesquisa\./i.test(l))
+      .filter(l => /^[A-ZÁÀÂÃÉÈÊÍÏÓÔÕÖÚÇÑ][A-Za-zÁÀÂÃÉÈÊÍÏÓÔÕÖÚÇÑáàâãéèêíïóôõöúçñ' .-]+$/.test(l));
     const max = Math.max(emails.length, orcids.length, nameCandidates.length);
     const rebuilt = [];
     for (let i=0;i<max;i++) {
@@ -435,7 +441,30 @@ function buildFolhaRostoFromTemplate(bodyInner, paras, sections) {
   });
   while (kept.length && /<w:p\b/.test(kept[kept.length-1]) && !getText(kept[kept.length-1]).trim()) kept.pop();
 
-  const instLines = rawLines.filter(l => /^\d+\.\s+/.test(l) && /[A-Za-z]/.test(l) && /(Universidade|Instituto|Faculdade|Centro|Hospital|UMC|Brasil|Brazil)/i.test(l)).map(x=>sanitizeXmlField(x,220)).filter(Boolean);
+  // Deduplicate author names from a repeated author table/list that often appears in corrupted PDF extraction
+  const seenNames = new Set();
+  const cleanAuthors = [];
+  for (const a of authors) {
+    const name = cleanArtifacts(a.name || '');
+    const email = cleanArtifacts(a.email || '');
+    const orcid = cleanArtifacts(a.orcid || '');
+    if (!name && !email && !orcid) continue;
+    const key = (name || email).toLowerCase();
+    if (key && seenNames.has(key)) {
+      // merge missing fields
+      const ex = cleanAuthors.find(x => (x.name||x.email).toLowerCase()===key);
+      if (ex) { ex.email = ex.email || email; ex.orcid = ex.orcid || orcid; ex.name = ex.name || name; }
+      continue;
+    }
+    if (key) seenNames.add(key);
+    cleanAuthors.push({ name, email, orcid });
+  }
+  authors.length = 0; authors.push(...cleanAuthors.filter(a => a.name || a.email || a.orcid));
+
+  const instLines = rawLines
+    .map(l => cleanArtifacts(l))
+    .filter(l => /^\d+\.\s+/.test(l) && /[A-Za-z]/.test(l) && /(Universidade|Instituto|Faculdade|Centro|Hospital|UMC|Brasil|Brazil|Mogi)/i.test(l))
+    .map(x=>sanitizeXmlField(x,220)).filter(Boolean);
   let instIdx = 0;
   const filled = kept.map(b => {
     if (/<w:tbl\b/.test(b)) {
@@ -473,13 +502,13 @@ function buildFolhaRostoFromTemplate(bodyInner, paras, sections) {
     const t = getText(b);
     const n = norm(t);
     if (n.startsWith('titulo em portugues:') || n.startsWith('titulo em portugues :')) {
-      return fillParaTextKeepStyle(b, `Título em Português: ${tituloPt || t.replace(/^[^:]*:\s*/,'')}`);
+      return fillParaTextKeepStyle(b, `Título em Português: ${cleanArtifacts(tituloPt || t.replace(/^[^:]*:\s*/,''))}`);
     }
     if (n.startsWith('titulo em ingles:') || n.startsWith('titulo em ingles :')) {
-      return fillParaTextKeepStyle(b, `Título em Inglês: ${tituloEn || t.replace(/^[^:]*:\s*/,'')}`);
+      return fillParaTextKeepStyle(b, `Título em Inglês: ${cleanArtifacts(tituloEn || t.replace(/^[^:]*:\s*/,''))}`);
     }
     if (n.startsWith('titulo em espanhol:') || n.startsWith('titulo em espanhol :')) {
-      return fillParaTextKeepStyle(b, `Título em Espanhol: ${tituloEs || t.replace(/^[^:]*:\s*/,'')}`);
+      return fillParaTextKeepStyle(b, `Título em Espanhol: ${cleanArtifacts(tituloEs || t.replace(/^[^:]*:\s*/,''))}`);
     }
     if (n.startsWith('categoria de publicacao')) {
       return categoria ? fillParaTextKeepStyle(b, `Categoria de Publicação: ${categoria}`) : b;

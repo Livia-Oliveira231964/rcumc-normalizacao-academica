@@ -273,7 +273,7 @@ export function removerArtefatosLayout(texto) {
   if (!texto || typeof texto !== 'string') return '';
   return texto
     .replace(/Revista\s+Cient[ií]fica\s+UMC\s*\|\s*RCUMC\s*\|\s*ISSN:\s*2525-5150/gi, '')
-    .replace(/RCUMC\s*\|\s*Vol\.?\s*\d*\s*\|\s*N\.?\s*\d*\s*\|\s*Ano\s*\d*\s*\|?/gi, '')
+    .replace(/RCUMC\s*\|\s*Vol\.?\s*[^\s|]*\s*\|\s*N\.?\s*[^\s|]*\s*\|\s*Ano\s*[^\s|]*\s*\|?/gi, '')
     .replace(/P[áa]gina\s*\d+\s*(de\s*\d+)?/gi, '')
     .replace(/Page\s*\d+\s*(of\s*\d+)?/gi, '')
     .replace(/(^|\n)\s*\d{1,3}\s*(?=\n|$)/g, '$1')
