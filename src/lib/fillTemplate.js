@@ -59,12 +59,15 @@ function parseSections(text) {
     while (v.length && !v[v.length - 1].trim()) v.pop();
     sections[k] = v.join('\n').trim();
   }
-  // Remove header/footer artifacts that may have leaked into extracted text
+  // Remove header/footer/page artifacts that may have leaked into extracted text
   for (const k of Object.keys(sections)) {
     sections[k] = sections[k]
       .replace(/Revista\s+Cient[ií]fica\s+UMC\s*\|\s*RCUMC\s*\|\s*ISSN:\s*2525-5150/gi, '')
       .replace(/RCUMC\s*\|\s*Vol\.\s*\d+\s*\|\s*N\.\s*\d+\s*\|\s*Ano\s*\d+\s*\|?/gi, '')
-      .replace(/^\s*\d+\s*$/gm, '') // isolated page numbers
+      .replace(/P[áa]gina\s*\d+\s*(de\s*\d+)?/gi, '')
+      .replace(/Page\s*\d+\s*(of\s*\d+)?/gi, '')
+      .replace(/^\s*\d{1,3}\s*$/gm, '')
+      .replace(/[ \t]{2,}/g, ' ')
       .replace(/\n{3,}/g, '\n\n')
       .trim();
   }
@@ -109,8 +112,12 @@ function isCleanBlank(p) {
   return true;
 }
 
-function makeParaFromTemplate(templateParaXml, text) {
-  const pPr = getPPr(templateParaXml);
+function makeParaFromTemplate(templateParaXml, text, opts = {}) {
+  let pPr = getPPr(templateParaXml);
+  if (opts.pageBreakBefore) {
+    if (/<w:pageBreakBefore\/>/.test(pPr)) pPr = pPr.replace(/<w:pageBreakBefore[^>]*\/>/, '<w:pageBreakBefore/>');
+    else pPr = pPr.replace(/<\/w:pPr>/, '<w:pageBreakBefore/></w:pPr>');
+  }
   const rPr = getCleanRPr(templateParaXml);
   const lines = String(text ?? '').split('\n');
   const runs = lines.map((line, i) => {
@@ -175,7 +182,7 @@ function buildResumoSimplesFromTemplate(paras, sections) {
   const blank = paras.find(p => isCleanBlank(p) && !p.style) || paras.find(p => isCleanBlank(p)) || paras.find(p => !p.txt) || pResumoV;
 
   const out = [];
-  const emit = (tpl, text) => { if (tpl) out.push(makeParaFromTemplate(tpl.xml, text)); };
+  const emit = (tpl, text, opts) => { if (tpl) out.push(makeParaFromTemplate(tpl.xml, text, opts)); };
   const emitBlank = () => { if (blank) out.push(makeParaFromTemplate(blank.xml, '')); };
 
   emit(pTituloPtH, 'Título em Português');
@@ -187,7 +194,7 @@ function buildResumoSimplesFromTemplate(paras, sections) {
   emit(pKwH, 'Palavras-chave');
   emit(pKwV, sections.palavras_chave || '');
   emitBlank();
-  emit(pTitleEnH, 'Title in English');
+  emit(pTitleEnH, 'Title in English', { pageBreakBefore: true });
   emit(pTitleEnV, sections.titulo_en || 'Title of the article in english.');
   emitBlank();
   emit(pAbsH, 'Abstract');
@@ -196,7 +203,7 @@ function buildResumoSimplesFromTemplate(paras, sections) {
   emit(pKwsH, 'Keywords');
   emit(pKwsV, sections.keywords || '');
   emitBlank();
-  emit(pTituloEsH, 'Título en Español');
+  emit(pTituloEsH, 'Título en Español', { pageBreakBefore: true });
   emit(pTituloEsV, sections.titulo_es || 'Título del artículo en español.');
   emitBlank();
   emit(pResH, 'Resumen');

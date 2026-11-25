@@ -197,15 +197,32 @@ export function validarDocumento(texto, tipoDocumento) {
 
   // --- Regras para Resumo Simples ---
   if (tipoDocumento === DOC_TYPES.RESUMO_SIMPLES) {
-    const palavras = contarPalavras(textoLimpo);
-    if (palavras > UMC_RULES.resumoSimples.maxPalavras) {
-      resultado.naoConformidades.push(
-        `Corpo do texto excede ${UMC_RULES.resumoSimples.maxPalavras} palavras (encontrado: ${palavras}).`
-      );
-    } else {
-      resultado.conformidades.push(
-        `Contagem de palavras dentro do limite (${palavras}/${UMC_RULES.resumoSimples.maxPalavras}).`
-      );
+    // Valida por bloco (PT/EN/ES) - cada resumo até 500 palavras
+    const blocos = [
+      ['Resumo (PT)', /(?:^|\n)Resumo\s*\n([\s\S]*?)(?=\nPalavras[- ]chave|\nTitle in English|$)/i],
+      ['Abstract (EN)', /(?:^|\n)Abstract\s*\n([\s\S]*?)(?=\nKeywords?|\nT[íi]tulo en Espa[nñ]ol|$)/i],
+      ['Resumen (ES)', /(?:^|\n)Resumen\s*\n([\s\S]*?)(?=\nPalabras clave|$)/i],
+    ];
+    let anyBlock = false;
+    for (const [label, re] of blocos) {
+      const m = textoLimpo.match(re);
+      if (m) {
+        anyBlock = true;
+        const n = contarPalavras(m[1]);
+        if (n > UMC_RULES.resumoSimples.maxPalavras) {
+          resultado.naoConformidades.push(`${label} excede ${UMC_RULES.resumoSimples.maxPalavras} palavras (encontrado: ${n}).`);
+        } else {
+          resultado.conformidades.push(`${label} dentro do limite (${n}/${UMC_RULES.resumoSimples.maxPalavras}).`);
+        }
+      }
+    }
+    if (!anyBlock) {
+      const palavras = contarPalavras(textoLimpo);
+      if (palavras > UMC_RULES.resumoSimples.maxPalavras) {
+        resultado.naoConformidades.push(`Corpo do texto excede ${UMC_RULES.resumoSimples.maxPalavras} palavras (encontrado: ${palavras}).`);
+      } else {
+        resultado.conformidades.push(`Contagem de palavras dentro do limite (${palavras}/${UMC_RULES.resumoSimples.maxPalavras}).`);
+      }
     }
 
     // Verifica palavras-chave (heurística: linha contendo "palavras-chave" ou "keywords")
@@ -257,7 +274,10 @@ export function removerArtefatosLayout(texto) {
   return texto
     .replace(/Revista\s+Cient[ií]fica\s+UMC\s*\|\s*RCUMC\s*\|\s*ISSN:\s*2525-5150/gi, '')
     .replace(/RCUMC\s*\|\s*Vol\.\s*\d+\s*\|\s*N\.\s*\d+\s*\|\s*Ano\s*\d+\s*\|?/gi, '')
-    .replace(/(^|\n)\s*\d{1,3}\s*(?=\n|$)/g, '$1') // números de página isolados
+    .replace(/P[áa]gina\s*\d+\s*(de\s*\d+)?/gi, '')
+    .replace(/Page\s*\d+\s*(of\s*\d+)?/gi, '')
+    .replace(/(^|\n)\s*\d{1,3}\s*(?=\n|$)/g, '$1')
+    .replace(/[ \t]{2,}/g, ' ')
     .replace(/\n{3,}/g, '\n\n');
 }
 
