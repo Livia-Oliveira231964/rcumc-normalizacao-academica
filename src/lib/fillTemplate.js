@@ -379,9 +379,15 @@ function buildFolhaRostoFromTemplate(bodyInner, paras, sections) {
     return '';
   };
 
-  const tituloPt = findField([/T[íi]tulo em Portugu[eê]s\s*[:\-]\s*(.+)/i]) || sections.titulo_pt || sections._preamble?.split('\n')[0] || '';
-  const tituloEn = findField([/T[íi]tulo em Ingl[eê]s\s*[:\-]\s*(.+)/i, /Title in English\s*[:\-]\s*(.+)/i]) || sections.titulo_en || '';
-  const tituloEs = findField([/T[íi]tulo em Espanhol\s*[:\-]\s*(.+)/i, /T[íi]tulo en Espa[nñ]ol\s*[:\-]\s*(.+)/i]) || sections.titulo_es || '';
+  const cleanField = (s) => {
+    const v = cleanArtifacts(String(s || '').replace(/^[^:]*:\s*/, ''));
+    if (!v) return '';
+    if (/insira aqui o t[íi]tulo|title of the article|t[íi]tulo del art[íi]culo|nome da institui|cidade,\s*estado,\s*pa[íi]s/i.test(v)) return '';
+    return v;
+  };
+  const tituloPt = cleanField(findField([/T[íi]tulo em Portugu[eê]s\s*[:\-]\s*(.+)/i]) || sections.titulo_pt || sections._preamble?.split('\n')[0] || '');
+  const tituloEn = cleanField(findField([/T[íi]tulo em Ingl[eê]s\s*[:\-]\s*(.+)/i, /Title in English\s*[:\-]\s*(.+)/i]) || sections.titulo_en || '');
+  const tituloEs = cleanField(findField([/T[íi]tulo em Espanhol\s*[:\-]\s*(.+)/i, /T[íi]tulo en Espa[nñ]ol\s*[:\-]\s*(.+)/i]) || sections.titulo_es || '');
   const categoria = findField([/Categoria de Publica[cç][aã]o\s*[:\-]\s*(.+)/i]);
   const tipoPub = findField([/Tipo de Publica[cç][aã]o\s*[:\-]\s*(.+)/i]);
   const area = findField([/[ÁA]rea do Conhecimento\s*[:\-]\s*(.+)/i]);
@@ -502,13 +508,13 @@ function buildFolhaRostoFromTemplate(bodyInner, paras, sections) {
     const t = getText(b);
     const n = norm(t);
     if (n.startsWith('titulo em portugues:') || n.startsWith('titulo em portugues :')) {
-      return fillParaTextKeepStyle(b, `Título em Português: ${cleanArtifacts(tituloPt || t.replace(/^[^:]*:\s*/,''))}`);
+      return fillParaTextKeepStyle(b, `Título em Português: ${tituloPt}`);
     }
-    if (n.startsWith('titulo em ingles:') || n.startsWith('titulo em ingles :')) {
-      return fillParaTextKeepStyle(b, `Título em Inglês: ${cleanArtifacts(tituloEn || t.replace(/^[^:]*:\s*/,''))}`);
+    if (n.startsWith('titulo em ingles:') || n.startsWith('titulo em ingles :') || n.startsWith('title in english')) {
+      return fillParaTextKeepStyle(b, `Título em Inglês: ${tituloEn}`);
     }
-    if (n.startsWith('titulo em espanhol:') || n.startsWith('titulo em espanhol :')) {
-      return fillParaTextKeepStyle(b, `Título em Espanhol: ${cleanArtifacts(tituloEs || t.replace(/^[^:]*:\s*/,''))}`);
+    if (n.startsWith('titulo em espanhol:') || n.startsWith('titulo em espanhol :') || n.startsWith('titulo en espanol')) {
+      return fillParaTextKeepStyle(b, `Título em Espanhol: ${tituloEs}`);
     }
     if (n.startsWith('categoria de publicacao')) {
       return categoria ? fillParaTextKeepStyle(b, `Categoria de Publicação: ${categoria}`) : b;
@@ -520,9 +526,9 @@ function buildFolhaRostoFromTemplate(bodyInner, paras, sections) {
       return area ? fillParaTextKeepStyle(b, `Área do Conhecimento: ${area}`) : b;
     }
     // fill institution lines if extracted
-    if (/^\d+\./.test(t.trim()) && (/nome da institu/i.test(n) || /institui/i.test(n))) {
+    if (/^\d+\./.test(t.trim()) && (/nome da institu/i.test(n) || /institui/i.test(n) || /cidade,\s*estado,\s*pa/i.test(n))) {
       if (instLines[instIdx]) { const v = instLines[instIdx++]; return fillParaTextKeepStyle(b, v); }
-      return b;
+      return fillParaTextKeepStyle(b, '');
     }
     return b;
   });
