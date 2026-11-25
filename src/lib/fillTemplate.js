@@ -146,7 +146,8 @@ function fillParaTextKeepStyle(pXml, text) {
     : baseRPr;
   const t = String(clean);
   const lm = t.match(/^([^:]{2,80}:)\s*([\s\S]*)$/);
-  const labelBold = /<w:b\/>|<w:b\s/.test(baseRPr) || isHeading;
+  // Keep label bold for "Label: value" fields (e.g., Título em Espanhol)
+  const labelBold = /<w:b\/>|<w:b\s/.test(baseRPr) || isHeading || /^t[íi]tulo\b/i.test(t);
   if (lm && labelBold) {
     const label = lm[1];
     const value = (lm[2] || '').trim();
@@ -566,6 +567,14 @@ function buildFolhaRostoFromTemplate(bodyInner, paras, sections) {
     }
     return b;
   });
+
+  // Remove trailing empty paragraphs to avoid a blank final page
+  while (filled.length > 1) {
+    const last = filled[filled.length - 1];
+    if (/<w:tbl\b/.test(last)) break;
+    if (getText(last).trim()) break;
+    filled.pop();
+  }
 
   return filled.join('');
 }
