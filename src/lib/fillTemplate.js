@@ -112,6 +112,55 @@ function isCleanBlank(p) {
   return true;
 }
 
+function sanitizeXmlField(s, max=220) {
+  const raw = String(s || '');
+  const v = raw.replace(/<[^>]+>/g, ' ').replace(/&lt;|&gt;|&amp;|&quot;|&#39;|&apos;/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!v) return '';
+  if (v.length > max) return v.slice(0, max).trim();
+  if (/\b(w:tbl|w:tc|w:tr|w:pPr|w:rPr|xml:space)\b/i.test(raw)) return '';
+  return v;
+}
+
+function plainTextFromMaybeXml(s) {
+  const raw = String(s || '');
+  if (!/[<]/.test(raw)) return raw.replace(/\s+/g,' ').trim();
+  // extract all w:t text
+  const re = /<w:t[^>]*>([\s\S]*?)<\/w:t>/g;
+  let m, out='';
+  while ((m=re.exec(raw))) out += m[1];
+  out = out.replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&').replace(/&quot;/g,'"').replace(/&#39;/g,"'");
+  // if it looks like OOXML internals leaked, drop it
+  if (/\b(?:w:tbl|w:tcPr|w:pPr|w:trPr|w:tblPr|xml:space=)\b/.test(out)) return '';
+  return out.replace(/\s+/g,' ').trim();
+}
+
+function fillParaTextKeepStyle(pXml, text) {
+  const rawText = plainTextFromMaybeXml(text);
+  const clean = sanitizeXmlField(rawText, 600) || rawText.slice(0,600);
+  const pPr = getPPr(pXml);
+  const baseRPr = getCleanRPr(pXml);
+  const style = getPStyle(pXml).toLowerCase();
+  const isHeading = /heading|t[íi]tulo|title/.test(style);
+  const bodyRPr = (!isHeading && /<w:b\/>|<w:b\s/.test(baseRPr))
+    ? baseRPr.replace(/<w:b\/>/g, '').replace(/<w:b\s[^>]*\/>/g, '').replace(/<w:bCs\/>/g, '').replace(/<w:bCs\s[^>]*\/>/g, '')
+    : baseRPr;
+  const t = String(clean);
+  const lm = t.match(/^([^:]{2,80}:)\s*([\s\S]*)$/);
+  const labelBold = /<w:b\/>|<w:b\s/.test(baseRPr) || isHeading;
+  if (lm && labelBold) {
+    const label = lm[1];
+    const value = (lm[2] || '').trim();
+    let labelRPr = baseRPr;
+    if (!/<w:b\/>|<w:b\s/.test(labelRPr)) labelRPr = labelRPr.replace(/<w:rPr>/, '<w:rPr><w:b/><w:bCs/>');
+    let valueRPr = baseRPr.replace(/<w:b\/>/g, '').replace(/<w:b\s[^>]*\/>/g, '').replace(/<w:bCs\/>/g, '').replace(/<w:bCs\s[^>]*\/>/g, '');
+    if (!/<w:rPr[\s\S]*?<\/w:rPr>/.test(valueRPr)) valueRPr = '<w:rPr/>';
+    const runs = [`<w:r>${labelRPr}${WT}${esc(label + (value ? ' ' : ''))}</w:t></w:r>`];
+    if (value) runs.push(`<w:r>${valueRPr}${WT}${esc(value)}</w:t></w:r>`);
+    return `<w:p>${pPr}${runs.join('')}</w:p>`;
+  }
+  return `<w:p>${pPr}<w:r>${bodyRPr}${WT}${esc(clean)}</w:t></w:r></w:p>`;
+}
+
 function makeParaFromTemplate(templateParaXml, text, opts = {}) {
   let pPr = getPPr(templateParaXml);
   if (opts.pageBreakBefore) {
@@ -119,10 +168,31 @@ function makeParaFromTemplate(templateParaXml, text, opts = {}) {
     else pPr = pPr.replace(/<\/w:pPr>/, '<w:pageBreakBefore/></w:pPr>');
   }
   const rPr = getCleanRPr(templateParaXml);
-  const lines = String(text ?? '').split('\n');
+  const raw = String(text ?? '');
+  // For "Label: value" keep label bold, value normal when template bold.
+  const lm = raw.match(/^([^:\n]{2,80}:)\s*([\s\S]*)$/);
+  const hasBold = /<w:b\/>|<w:b\s/.test(rPr);
+  if (lm && hasBold && !/\n/.test(raw)) {
+    const label = lm[1];
+    const value = (lm[2] || '').trim();
+    let valueRPr = rPr.replace(/<w:b\/>/g, '').replace(/<w:b\s[^>]*\/>/g, '').replace(/<w:bCs\/>/g, '').replace(/<w:bCs\s[^>]*\/>/g, '');
+    if (!/<w:rPr[\s\S]*?<\/w:rPr>/.test(valueRPr)) valueRPr = '<w:rPr/>';
+    const runs = [`<w:r>${rPr}${WT}${esc(label + (value ? ' ' : ''))}</w:t></w:r>`];
+    if (value) runs.push(`<w:r>${valueRPr}${WT}${esc(value)}</w:t></w:r>`);
+    const pAttrs = (templateParaXml.match(/^<w:p(\s[^>]*)?>/) || ['<w:p>'])[0];
+    const openTag = pAttrs.startsWith('<w:p ') ? pAttrs : '<w:p>';
+    return `${openTag}${pPr}${runs}</w:p>`;
+  }
+  let outRPr = rPr;
+  const style = getPStyle(templateParaXml).toLowerCase();
+  const isHeading = /heading|t[íi]tulo|title/.test(style);
+  if (!isHeading && /<w:b\/>|<w:b\s/.test(outRPr)) {
+    outRPr = outRPr.replace(/<w:b\/>/g, '').replace(/<w:b\s[^>]*\/>/g, '').replace(/<w:bCs\/>/g, '').replace(/<w:bCs\s[^>]*\/>/g, '');
+  }
+  const lines = raw.split('\n');
   const runs = lines.map((line, i) => {
     const br = i < lines.length - 1 ? '<w:br/>' : '';
-    return `<w:r>${rPr}${WT}${esc(line)}</w:t>${br}</w:r>`;
+    return `<w:r>${outRPr}${WT}${esc(line)}</w:t>${br}</w:r>`;
   }).join('');
   const pAttrs = (templateParaXml.match(/^<w:p(\s[^>]*)?>/) || ['<w:p>'])[0];
   const openTag = pAttrs.startsWith('<w:p ') ? pAttrs : '<w:p>';
@@ -259,21 +329,7 @@ function buildGenericFromTemplate(paras, sections) {
   return out.join('') || (body ? makeParaFromTemplate(body.xml, '') : '');
 }
 
-function fillParaTextKeepStyle(pXml, text) {
-  const pPr = getPPr(pXml);
-  const rPr = getCleanRPr(pXml);
-  const lines = String(text ?? '').split('\n');
-  const runs = lines.map((line, i) => {
-    const br = i < lines.length - 1 ? '<w:br/>' : '';
-    return `<w:r>${rPr}${WT}${esc(line)}</w:t>${br}</w:r>`;
-  }).join('');
-  const pAttrs = (pXml.match(/^<w:p(\s[^>]*)?>/) || ['<w:p>'])[0];
-  const openTag = pAttrs.startsWith('<w:p ') ? pAttrs : '<w:p>';
-  return `${openTag}${pPr}${runs}</w:p>`;
-}
-
 function replaceTableCellText(tblXml, rowIdx, colIdx, text) {
-  // simplistic: replace text in nth row/col tc
   let trCount = -1;
   return tblXml.replace(/<w:tr\b[\s\S]*?<\/w:tr>/g, (tr) => {
     trCount++;
@@ -282,10 +338,13 @@ function replaceTableCellText(tblXml, rowIdx, colIdx, text) {
     return tr.replace(/<w:tc\b[\s\S]*?<\/w:tc>/g, (tc) => {
       tcCount++;
       if (tcCount !== colIdx) return tc;
-      // replace all <w:p> inside tc with one paragraph keeping first para style
       const firstP = (tc.match(/<w:p\b[\s\S]*?<\/w:p>/) || ['<w:p><w:pPr/><w:r><w:rPr/><w:t></w:t></w:r></w:p>'])[0];
       const newP = fillParaTextKeepStyle(firstP, text);
-      return tc.replace(/<w:p\b[\s\S]*?<\/w:p>/g, '').replace(/(<w:tcPr[\s\S]*?<\/w:tcPr>)/, `$1${newP}`).replace(/(<w:tc\b[^>]*>)/, (m, open) => tc.includes('<w:tcPr') ? m : m);
+      // remove existing paragraphs and insert the new one after tcPr (or at tc start)
+      const tcPr = tc.match(/<w:tcPr\b[\s\S]*?<\/w:tcPr>/)?.[0] || '';
+      const withoutParas = tc.replace(/<w:p\b[\s\S]*?<\/w:p>/g, '');
+      if (tcPr) return withoutParas.replace(tcPr, tcPr + newP);
+      return withoutParas.replace(/<w:tc\b[^>]*>/, (m) => m + newP);
     });
   });
 }
@@ -315,12 +374,38 @@ function buildFolhaRostoFromTemplate(bodyInner, paras, sections) {
 
   // Parse authors from lines containing email/orcid/name patterns
   const authors = [];
+  // Try structured lines first
   for (const line of rawLines) {
     const email = (line.match(/[\w.+-]+@[\w.-]+\.[a-z]{2,}/i)||[''])[0];
     const orcid = (line.match(/https?:\/\/orcid\.org\/[\dXx-]+/i)||line.match(/\b\d{4}-\d{4}-\d{4}-[\dXx]{4}\b/)||[''])[0];
     if (email || orcid) {
-      let name = line.replace(email,'').replace(orcid,'').replace(/Nome\s*[:\-]/i,'').replace(/E-?mail\s*[:\-]/i,'').replace(/ORCID\s*[:\-]/i,'').replace(/[;|]+/g,' ').replace(/\s{2,}/g,' ').replace(/^[\s\-*,]+|[\s\-*,]+$/g,'').trim();
-      authors.push({ name, email, orcid: orcid && !orcid.startsWith('http') ? `https://orcid.org/${orcid}` : orcid });
+      let name = line.replace(email,'').replace(orcid,'').replace(/Nome\s*[:\-]/i,'').replace(/E-?mail\s*[:\-]/i,'').replace(/ORCID\s*[:\-]/i,'').replace(/[;|]+/g,' ').replace(/\s{2,}/g,' ').replace(/^[\s\-*,0-9]+|[\s\-*,]+$/g,'').trim();
+      const normOrcid = orcid && !orcid.startsWith('http') ? `https://orcid.org/${orcid}` : orcid;
+      authors.push({ name, email, orcid: normOrcid });
+    }
+  }
+  // Fallback: collect names/emails/orcids in sequence from table-like extraction
+  if (authors.length === 0 || authors.every(a => !a.name)) {
+    const emails = raw.match(/[\w.+-]+@[\w.-]+\.[a-z]{2,}/gi) || [];
+    const orcids = raw.match(/https?:\/\/orcid\.org\/[\dXx-]+|\b\d{4}-\d{4}-\d{4}-[\dXx]{4}\b/gi) || [];
+    // names: lines before emails that look like person names
+    const nameCandidates = rawLines.filter(l => !/@/.test(l) && !/orcid/i.test(l) && !/Nome\s*E-mail/i.test(l) && !/^\d+[.\s]/.test(l) && l.length > 3 && l.length < 80 && !/Universidade|Institui|Categoria|Tipo de Publica|Área do Conhecimento|Capa do Artigo|Título|Autor Correspondente|Informações/i.test(l));
+    const max = Math.max(emails.length, orcids.length, nameCandidates.length);
+    const rebuilt = [];
+    for (let i=0;i<max;i++) {
+      const orcid = orcids[i] || '';
+      rebuilt.push({ name: nameCandidates[i] || '', email: emails[i] || '', orcid: orcid && !orcid.startsWith('http') ? `https://orcid.org/${orcid}` : orcid });
+    }
+    if (rebuilt.length) {
+      // merge by index
+      for (let i=0;i<rebuilt.length;i++) {
+        if (!authors[i]) authors[i]=rebuilt[i];
+        else {
+          authors[i].name = authors[i].name || rebuilt[i].name;
+          authors[i].email = authors[i].email || rebuilt[i].email;
+          authors[i].orcid = authors[i].orcid || rebuilt[i].orcid;
+        }
+      }
     }
   }
 
@@ -336,34 +421,40 @@ function buildFolhaRostoFromTemplate(bodyInner, paras, sections) {
   });
   while (kept.length && /<w:p\b/.test(kept[kept.length-1]) && !getText(kept[kept.length-1]).trim()) kept.pop();
 
+  const instLines = rawLines.filter(l => /^\d+\.\s+/.test(l) && /[A-Za-z]/.test(l) && /(Universidade|Instituto|Faculdade|Centro|Hospital|UMC|Brasil|Brazil)/i.test(l)).map(x=>sanitizeXmlField(x,220)).filter(Boolean);
+  let instIdx = 0;
   const filled = kept.map(b => {
     if (/<w:tbl\b/.test(b)) {
       let tbl = b;
-      if (authors.length) {
-        // clear template sample rows 1..n and fill with authors
-        const trMatches = [...tbl.matchAll(/<w:tr\b[\s\S]*?<\/w:tr>/g)];
-        // Replace rows after header (index 0) - rebuild table: keep header row, add author rows
-        if (trMatches.length > 1) {
-          const header = trMatches[0][0];
-          // build author rows by cloning row 1 as template
-          const rowTpl = trMatches[1][0];
-          const authorRows = authors.slice(0, 12).map(a => {
-            let row = rowTpl;
-            row = replaceTableCellText(row, 0, 0, a.name || '');
-            row = replaceTableCellText(row, 0, 1, a.email || '');
-            row = replaceTableCellText(row, 0, 2, a.orcid || '');
-            return row;
-          }).join('');
-          tbl = tbl.replace(/<w:tr\b[\s\S]*?<\/w:tr>/g, (m) => {
-            // replace first occurrence with header+authors, drop rest
-            return '\x00';
-          });
-          const parts = tbl.split('\x00');
-          // parts[0] before first tr, parts[1] between tr1-tr2 etc., last after last tr
-          tbl = parts[0] + header + authorRows + parts[parts.length - 1];
+              if (authors.length) {
+          const trMatches = [...tbl.matchAll(/<w:tr\b[\s\S]*?<\/w:tr>/g)];
+          if (trMatches.length > 1) {
+            const header = trMatches[0][0];
+            const rowTpl = trMatches[1][0];
+            const makeRow = (a) => {
+              let row = rowTpl;
+              const cells = [a.name || '', a.email || '', a.orcid || ''];
+              let ci = -1;
+              row = row.replace(/<w:tc\b[\s\S]*?<\/w:tc>/g, (tc) => {
+                ci++;
+                const val = cells[ci] ?? '';
+                const firstP = (tc.match(/<w:p\b[\s\S]*?<\/w:p>/) || ['<w:p><w:pPr/><w:r><w:rPr/><w:t></w:t></w:r></w:p>'])[0];
+                const newP = fillParaTextKeepStyle(firstP, val);
+                const tcPr = tc.match(/<w:tcPr\b[\s\S]*?<\/w:tcPr>/)?.[0] || '';
+                const withoutParas = tc.replace(/<w:p\b[\s\S]*?<\/w:p>/g, '');
+                if (tcPr) return withoutParas.replace(tcPr, tcPr + newP);
+                return withoutParas.replace(/<w:tc\b[^>]*>/, (m) => m + newP);
+              });
+              return row;
+            };
+            const authorRows = authors.slice(0, 12).map(makeRow).join('');
+            const firstTrIdx = tbl.indexOf(trMatches[0][0]);
+            const lastTr = trMatches[trMatches.length - 1][0];
+            const lastTrIdx = tbl.lastIndexOf(lastTr);
+            tbl = tbl.slice(0, firstTrIdx) + header + authorRows + tbl.slice(lastTrIdx + lastTr.length);
+          }
         }
-      }
-      return tbl;
+        return tbl;
     }
     const t = getText(b);
     const n = norm(t);
@@ -384,6 +475,11 @@ function buildFolhaRostoFromTemplate(bodyInner, paras, sections) {
     }
     if (n.startsWith('area do conhecimento')) {
       return area ? fillParaTextKeepStyle(b, `Área do Conhecimento: ${area}`) : b;
+    }
+    // fill institution lines if extracted
+    if (/^\d+\./.test(t.trim()) && (/nome da institu/i.test(n) || /institui/i.test(n))) {
+      if (instLines[instIdx]) { const v = instLines[instIdx++]; return fillParaTextKeepStyle(b, v); }
+      return b;
     }
     return b;
   });
