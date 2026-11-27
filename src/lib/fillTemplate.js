@@ -174,6 +174,28 @@ function cleanArtifacts(text='') {
     .trim();
 }
 
+const RESUMO_LABEL_RE = /(Objetivo:|Métodos:|Metodos:|Resultados:|Conclusão:|Conclusao:|Objective:|Methods:|Results:|Conclusion:|Conclusión:)/g;
+
+function buildRunsWithBoldLabels(text, normalRPr, boldRPr) {
+  const lines = String(text ?? '').split('\n');
+  const runs = [];
+  lines.forEach((line, lineIdx) => {
+    const parts = line.split(RESUMO_LABEL_RE).filter((p) => p !== '');
+    const effectiveParts = parts.length ? parts : [''];
+    for (const part of effectiveParts) {
+      if (!part) continue;
+      const isLabel = RESUMO_LABEL_RE.test(part);
+      RESUMO_LABEL_RE.lastIndex = 0;
+      const rPr = isLabel ? boldRPr : normalRPr;
+      runs.push(`<w:r>${rPr}${WT}${esc(part)}</w:t></w:r>`);
+    }
+    if (lineIdx < lines.length - 1) {
+      runs.push(`<w:r>${normalRPr}<w:br/></w:r>`);
+    }
+  });
+  return runs.join('');
+}
+
 function makeParaFromTemplate(templateParaXml, text, opts = {}) {
   let pPr = getPPr(templateParaXml);
   if (opts.pageBreakBefore) {
@@ -182,30 +204,44 @@ function makeParaFromTemplate(templateParaXml, text, opts = {}) {
   }
   const rPr = getCleanRPr(templateParaXml);
   const raw = cleanArtifacts(String(text ?? ''));
+  const style = getPStyle(templateParaXml).toLowerCase();
+  const isHeading = /heading|t[íi]tulo|title/.test(style);
+
+  let normalRPr = rPr;
+  if (!isHeading && /<w:b\/>|<w:b\s/.test(normalRPr)) {
+    normalRPr = normalRPr.replace(/<w:b\/>/g, '').replace(/<w:b\s[^>]*\/>/g, '').replace(/<w:bCs\/>/g, '').replace(/<w:bCs\s[^>]*\/>/g, '');
+  }
+  let boldRPr = normalRPr;
+  if (!/<w:b\/>|<w:b\s/.test(boldRPr)) {
+    boldRPr = boldRPr.replace(/<w:rPr([^>]*)>/, '<w:rPr$1><w:b/><w:bCs/>');
+    if (!/<w:rPr[\s\S]*?<\/w:rPr>/.test(boldRPr)) boldRPr = '<w:rPr><w:b/><w:bCs/></w:rPr>';
+  }
+
+  const hasResumoLabels = RESUMO_LABEL_RE.test(raw);
+  RESUMO_LABEL_RE.lastIndex = 0;
+  if (hasResumoLabels) {
+    const pAttrs = (templateParaXml.match(/^<w:p(\s[^>]*)?>/) || ['<w:p>'])[0];
+    const openTag = pAttrs.startsWith('<w:p ') ? pAttrs : '<w:p>';
+    return `${openTag}${pPr}${buildRunsWithBoldLabels(raw, normalRPr, boldRPr)}</w:p>`;
+  }
+
   // For "Label: value" keep label bold, value normal when template bold.
   const lm = raw.match(/^([^:\n]{2,80}:)\s*([\s\S]*)$/);
   const hasBold = /<w:b\/>|<w:b\s/.test(rPr);
   if (lm && hasBold && !/\n/.test(raw)) {
     const label = lm[1];
     const value = (lm[2] || '').trim();
-    let valueRPr = rPr.replace(/<w:b\/>/g, '').replace(/<w:b\s[^>]*\/>/g, '').replace(/<w:bCs\/>/g, '').replace(/<w:bCs\s[^>]*\/>/g, '');
-    if (!/<w:rPr[\s\S]*?<\/w:rPr>/.test(valueRPr)) valueRPr = '<w:rPr/>';
     const runs = [`<w:r>${rPr}${WT}${esc(label + (value ? ' ' : ''))}</w:t></w:r>`];
-    if (value) runs.push(`<w:r>${valueRPr}${WT}${esc(value)}</w:t></w:r>`);
+    if (value) runs.push(`<w:r>${normalRPr}${WT}${esc(value)}</w:t></w:r>`);
     const pAttrs = (templateParaXml.match(/^<w:p(\s[^>]*)?>/) || ['<w:p>'])[0];
     const openTag = pAttrs.startsWith('<w:p ') ? pAttrs : '<w:p>';
     return `${openTag}${pPr}${runs}</w:p>`;
   }
-  let outRPr = rPr;
-  const style = getPStyle(templateParaXml).toLowerCase();
-  const isHeading = /heading|t[íi]tulo|title/.test(style);
-  if (!isHeading && /<w:b\/>|<w:b\s/.test(outRPr)) {
-    outRPr = outRPr.replace(/<w:b\/>/g, '').replace(/<w:b\s[^>]*\/>/g, '').replace(/<w:bCs\/>/g, '').replace(/<w:bCs\s[^>]*\/>/g, '');
-  }
+
   const lines = raw.split('\n');
   const runs = lines.map((line, i) => {
     const br = i < lines.length - 1 ? '<w:br/>' : '';
-    return `<w:r>${outRPr}${WT}${esc(line)}</w:t>${br}</w:r>`;
+    return `<w:r>${normalRPr}${WT}${esc(line)}</w:t>${br}</w:r>`;
   }).join('');
   const pAttrs = (templateParaXml.match(/^<w:p(\s[^>]*)?>/) || ['<w:p>'])[0];
   const openTag = pAttrs.startsWith('<w:p ') ? pAttrs : '<w:p>';
@@ -266,7 +302,12 @@ function buildResumoSimplesFromTemplate(paras, sections) {
 
   const out = [];
   const emit = (tpl, text, opts) => { if (tpl) out.push(makeParaFromTemplate(tpl.xml, text, opts)); };
-  const emitBlank = () => { if (blank) out.push(makeParaFromTemplate(blank.xml, '')); };
+  const emitBlank = () => {
+    if (!blank) return;
+    const last = out[out.length - 1];
+    if (last && !getParaText(last).trim()) return; // avoid consecutive blanks
+    out.push(makeParaFromTemplate(blank.xml, ''));
+  };
 
   emit(pTituloPtH, 'Título em Português');
   emit(pTituloPtV, sections.titulo_pt || sections._preamble || 'Título do artigo em português.');
@@ -276,8 +317,7 @@ function buildResumoSimplesFromTemplate(paras, sections) {
   emitBlank();
   emit(pKwH, 'Palavras-chave');
   emit(pKwV, sections.palavras_chave || '');
-  emitBlank();
-  emitBlank();
+
   emit(pTitleEnH, 'Title in English', { pageBreakBefore: true });
   emit(pTitleEnV, sections.titulo_en || 'Title of the article in english.');
   emitBlank();
@@ -286,8 +326,7 @@ function buildResumoSimplesFromTemplate(paras, sections) {
   emitBlank();
   emit(pKwsH, 'Keywords');
   emit(pKwsV, sections.keywords || '');
-  emitBlank();
-  emitBlank();
+
   emit(pTituloEsH, 'Título en Español', { pageBreakBefore: true });
   emit(pTituloEsV, sections.titulo_es || 'Título del artículo en español.');
   emitBlank();
@@ -297,6 +336,7 @@ function buildResumoSimplesFromTemplate(paras, sections) {
   emit(pPcH, 'Palabras clave');
   emit(pPcV, sections.palabras_clave || '');
 
+  while (out.length && !getParaText(out[out.length - 1]).trim()) out.pop();
   return out.join('');
 }
 
@@ -607,8 +647,25 @@ export async function preencherModeloDocx(tipoDocumento, texto) {
   else if (tipoDocumento === DOC_TYPES.FOLHA_ROSTO || tipoDocumento === DOC_TYPES.CARTA_APRESENTACAO) bodyContent = buildFolhaRostoFromTemplate(bodyInner, paras, sections);
   else bodyContent = buildGenericFromTemplate(paras, sections);
 
-  const sectPara = sectPr ? `<w:p><w:pPr>${sectPr}</w:pPr></w:p>` : '';
-  const newBody = `<w:body>${bodyContent}${sectPara}</w:body>`;
+  let finalBodyContent = bodyContent;
+  if (sectPr) {
+    const lastPIdx = finalBodyContent.lastIndexOf('<w:p');
+    if (lastPIdx !== -1) {
+      const pPrIdx = finalBodyContent.indexOf('<w:pPr', lastPIdx);
+      const pPrCloseIdx = finalBodyContent.indexOf('</w:pPr>', lastPIdx);
+      const pEndIdx = finalBodyContent.indexOf('</w:p>', lastPIdx);
+      if (pPrIdx !== -1 && pPrCloseIdx !== -1 && pPrIdx < pEndIdx) {
+        finalBodyContent = finalBodyContent.slice(0, pPrCloseIdx) + sectPr + finalBodyContent.slice(pPrCloseIdx);
+      } else if (pEndIdx !== -1) {
+        finalBodyContent = finalBodyContent.slice(0, lastPIdx) + finalBodyContent.slice(lastPIdx).replace(/<w:p([^>]*)>/, `<w:p$1><w:pPr>${sectPr}</w:pPr>`);
+      } else {
+        finalBodyContent += `<w:p><w:pPr>${sectPr}</w:pPr></w:p>`;
+      }
+    } else {
+      finalBodyContent += `<w:p><w:pPr>${sectPr}</w:pPr></w:p>`;
+    }
+  }
+  const newBody = `<w:body>${finalBodyContent}</w:body>`;
   docXml = docXml.replace(/<w:body>[\s\S]*<\/w:body>/, newBody);
 
   zip.file(docXmlPath, docXml);
